@@ -18,10 +18,12 @@ generation:
   # Thinking mode used when a player has not chosen one with /aib mode (fast | light | standard | extra)
   default-mode: standard
   auto-orient: true          # auto-correct stair facing / slab type from context (roof slopes, wall-backed, chairs)
-  # Self-verification: "adaptive" = reviewers work through a checklist and decide themselves when everything is
-  # verified (stops early, continues while fixes need re-checking, capped by adaptive-max-rounds);
-  # "fixed" = up to verify-rounds rounds of the mode.
-  review-strategy: adaptive
+  # Self-verification strategy (measured on 6 A/B benchmark rounds, /aib bench review):
+  #   "fixed"    - up to verify-rounds rounds of the mode. Won 5 of 6 blind comparisons, 1.9x faster and
+  #                2.6x cheaper in tokens than adaptive. Default.
+  #   "adaptive" - reviewers work through a checklist and decide themselves when everything is verified;
+  #                more consistent on a bad day but slower and ~2.6x the input tokens.
+  review-strategy: fixed
   adaptive-max-rounds: 6
   # Change requests:
   #   "plan"   = edit plan (area, steps, acceptance criteria) -> one call builds everything -> verify by criteria

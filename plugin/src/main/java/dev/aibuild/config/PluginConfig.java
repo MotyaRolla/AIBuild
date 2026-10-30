@@ -89,8 +89,8 @@ public final class PluginConfig {
 
         minScore = c.getInt("generation.min-score", 86);
         repairFailedOps = c.getBoolean("generation.repair-failed-ops", true);
-        String rs = c.getString("generation.review-strategy", "adaptive").trim().toLowerCase(java.util.Locale.ROOT);
-        reviewStrategy = rs.equals("fixed") ? "fixed" : "adaptive";
+        String rs = c.getString("generation.review-strategy", "fixed").trim().toLowerCase(java.util.Locale.ROOT);
+        reviewStrategy = rs.equals("adaptive") ? "adaptive" : "fixed";
         String es = c.getString("generation.edit-strategy", "plan").trim().toLowerCase(java.util.Locale.ROOT);
         editStrategy = es.equals("direct") || es.equals("steps") ? es : "plan";
         adaptiveMaxRounds = Math.max(1, Math.min(12, c.getInt("generation.adaptive-max-rounds", 6)));
