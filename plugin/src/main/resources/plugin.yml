@@ -1,0 +1,15 @@
+name: AIBuild
+version: '${project.version}'
+main: dev.aibuild.AIBuildPlugin
+api-version: '26.3'
+author: MotyaRolla
+description: AI generation and editing of detailed builds (DeepSeek V4.1 Flash via Command Code)
+permissions:
+  aibuild.use:
+    description: Use AIBuild (create/edit own builds)
+    default: op
+  aibuild.admin:
+    description: Manage all builds, reload
+    default: op
+    children:
+      aibuild.use: true

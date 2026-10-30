@@ -1,0 +1,102 @@
+# AIBuild — AI structure generation and editing
+# LLM: DeepSeek V4.1 Flash through the Command Code subscription (https://commandcode.ai)
+
+api:
+  # Command Code API key (user_...). Can also be supplied via the env variable COMMANDCODE_API_KEY.
+  key: ""
+  base-url: "https://api.commandcode.ai"
+  model: "deepseek/deepseek-v4.1-flash"
+  # auto = Provider API (Pro/GOAT plans), switches to /alpha/generate automatically for Go-plan keys
+  transport: auto            # auto | provider | generate
+  temperature: 0.6           # set to -1 to use the provider default
+  connect-timeout-seconds: 20
+  idle-timeout-seconds: 240  # abort a stream that sends nothing for this long
+  max-retries: 3
+  cli-version: auto          # x-command-code-version header for the generate transport ("auto" = npm latest)
+
+generation:
+  # Thinking mode used when a player has not chosen one with /aib mode (fast | light | standard | extra)
+  default-mode: standard
+  auto-orient: true          # auto-correct stair facing / slab type from context (roof slopes, wall-backed, chairs)
+  # Self-verification: "adaptive" = reviewers work through a checklist and decide themselves when everything is
+  # verified (stops early, continues while fixes need re-checking, capped by adaptive-max-rounds);
+  # "fixed" = up to verify-rounds rounds of the mode.
+  review-strategy: adaptive
+  adaptive-max-rounds: 6
+  # Change requests:
+  #   "plan"   = edit plan (area, steps, acceptance criteria) -> one call builds everything -> verify by criteria
+  #   "steps"  = edit plan -> each step built separately (slower, fragments style) -> verify by criteria
+  #   "direct" = one call writes all operations (old behaviour)
+  edit-strategy: plan
+  min-score: 86              # reviewer score needed to approve
+  repair-failed-ops: true    # ask the AI to fix ops that failed (bad block names etc.)
+  live-preview: true         # place intermediate results so players watch the build grow
+  max-concurrent-jobs: 2
+  max-extent: 96             # max size of a build along any axis
+  distance: 3                # gap between the player and the build front
+  include-block-list: true   # send the full 26.3 block list to the model (better validity)
+
+# Thinking modes. Players pick one with /aib mode <id>, or per request: /aib create --mode extra ...
+# Reasoning effort per pipeline role: off | low | medium | high | xhigh | max
+#   plan            design brief            build   each construction stage
+#   review          first self-review round (3 parallel experts: structure / exterior / interior)
+#   review-followup later fix-up rounds     edit    change requests (/aib edit, chat mode)
+# verify-rounds: max self-review rounds (stops early once all reviewers approve and checks pass)
+# max-tokens: output budget per call incl. thinking (model limit 393216). If a call spends the whole budget
+#   thinking, it is retried automatically with one level less effort.
+modes:
+  fast:
+    title: "Без думания"
+    eta: "~3–5 мин"
+    plan: "off"
+    build: "off"
+    review: "off"
+    review-followup: "off"
+    edit: "off"
+    verify-rounds: 3
+    edit-verify-rounds: 1
+    max-tokens: 32000
+  light:
+    title: "Лёгкое думание"
+    eta: "~8–11 мин"
+    plan: "off"
+    build: low
+    review: "off"
+    review-followup: "off"
+    edit: low
+    verify-rounds: 2
+    edit-verify-rounds: 1
+    max-tokens: 60000
+  standard:
+    title: "Стандарт"
+    eta: "~14–18 мин"
+    plan: "off"
+    build: low
+    review: low
+    review-followup: "off"
+    edit: low
+    verify-rounds: 3
+    edit-verify-rounds: 1
+    max-tokens: 60000
+  extra:
+    title: "Экстра-думание"
+    eta: "~35–60 мин"
+    plan: low
+    build: high
+    review: high
+    review-followup: low
+    edit: high
+    verify-rounds: 3
+    edit-verify-rounds: 2
+    max-tokens: 200000
+
+bench:
+  judge-effort: high         # reasoning of the blind judge in /aib bench
+
+placement:
+  blocks-per-tick: 4000
+  foundation-block: cobblestone
+  max-foundation-depth: 12
+
+debug:
+  save-transcripts: true     # plugins/AIBuild/logs/<build>/...
