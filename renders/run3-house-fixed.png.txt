@@ -1,0 +1,657 @@
+AIBUILD RENDER 21x18x20 (x-5..15 y0..17 z-3..16) states=125 symbols=2char
+Coordinates: x -> east (columns), z -> south (rows), y -> up; front faces SOUTH (+z).
+Each cell is a 2-char code (see LEGEND); .. = air; ,, = untouched terrain (unset ground y<=0, layers only). In elevation/top views a blank cell means no block along that ray. Read coordinates from the rulers: column = x (or z in east/west views), row = z (or y).
+LEGEND - every cell is a 2-char code: 1st char = material, 2nd char = orientation.
+  stairs:  ^ > v < = facing north/east/south/west (side of the TALL BACK; you walk up toward it)
+           n e s w = upside-down (half=top) stairs facing north/east/south/west
+  slabs:   _ = bottom half, ~ = top half, = = double;   logs/pillars: - axis x, / axis z, doubled = axis y
+  other directional blocks (doors, trapdoors when open, torches, ladders, beds, chests...): ^ > v < = facing;
+           closed trapdoors _ bottom / ~ top; u/d = facing up/down; h = hanging; doubled char = no orientation
+  .. = air, ,, = untouched natural ground. Auto-computed props (stair shape, fence/pane/wall connections,
+  waterlogged, leaves distance) are not shown.
+  A- = dark_oak_log[axis=x] x125
+  A/ = dark_oak_log[axis=z] x112
+  AA = dark_oak_log x90
+  B< = spruce_stairs[facing=west] x4
+  B> = spruce_stairs[facing=east] x5
+  B^ = spruce_stairs x90
+  Bs = spruce_stairs[facing=south,half=top] x8
+  Bv = spruce_stairs[facing=south] x75
+  CC = spruce_planks x179
+  DD = white_terracotta x175
+  EE = dark_oak_planks x126
+  FF = cobblestone x117
+  GG = oak_leaves x91
+  HH = stone_bricks x85
+  I< = cobblestone_stairs[facing=west] x5
+  I> = cobblestone_stairs[facing=east] x15
+  I^ = cobblestone_stairs x8
+  Is = cobblestone_stairs[facing=south,half=top] x2
+  Iv = cobblestone_stairs[facing=south] x12
+  J^ = dark_oak_stairs x3
+  Je = dark_oak_stairs[facing=east,half=top] x8
+  Jn = dark_oak_stairs[half=top] x11
+  Js = dark_oak_stairs[facing=south,half=top] x8
+  Jw = dark_oak_stairs[facing=west,half=top] x7
+  K< = spruce_trapdoor[facing=west,open=true] x8
+  K> = spruce_trapdoor[facing=east,open=true] x8
+  K^ = spruce_trapdoor[open=true] x8
+  Kv = spruce_trapdoor[facing=south,open=true] x11
+  L_ = dark_oak_slab x1
+  L~ = dark_oak_slab[type=top] x30
+  MM = dark_oak_fence x27
+  NN = glass_pane x25
+  OO = oak_fence x23
+  PP = andesite x22
+  QQ = lantern x5
+  Qh = lantern[hanging=true] x15
+  R- = oak_log[axis=x] x12
+  RR = oak_log x8
+  SS = flowering_azalea_leaves x19
+  TT = birch_leaves x18
+  U^ = barrel x15
+  VV = mossy_cobblestone x12
+  WW = short_grass x12
+  X~ = stone_brick_slab[type=top] x12
+  YY = dirt_path x11
+  ZZ = farmland x11
+  aa = cracked_stone_bricks x10
+  bb = hay_block x10
+  c> = ladder[facing=east] x10
+  f< = chest[facing=west] x3
+  f> = chest[facing=east] x3
+  fv = chest[facing=south] x2
+  gg = tall_grass x4 | tall_grass[half=upper] x4
+  ii = brown_carpet x6
+  j^ = campfire[signal_fire=true] x4 | campfire x2
+  kk = poppy x6
+  ll = red_carpet x6
+  mm = white_candle[candles=2,lit=true] x2 | white_candle[candles=3,lit=true] x2 | white_candle[lit=true] x2
+  oo = allium x5
+  pp = coarse_dirt x5
+  q_ = cobblestone_slab x5
+  rr = birch_log x4
+  tt = bookshelf x4
+  xx = carrots x4
+  yy = chiseled_stone_bricks x4
+  zz = cornflower x4
+  00 = dandelion x4
+  1^ = dark_oak_door x1 | dark_oak_door[half=upper,hinge=right] x1 | dark_oak_door[half=upper] x1 | dark_oak_door[hinge=right] x1
+  22 = iron_chain x4
+  33 = oxeye_daisy x4
+  44 = wheat x4
+  55 = cobweb x3
+  6> = dark_oak_trapdoor[facing=east,open=true] x2
+  6_ = dark_oak_trapdoor x1
+  77 = fern x3
+  88 = potatoes x3
+  99 = water x3
+  ## = composter x2
+  $$ = hanging_roots x2
+  %v = oak_fence_gate[facing=south] x2
+  && = polished_andesite x2
+  ** = potted_fern x2
+  +v = red_bed[facing=south,part=head] x1 | red_bed[facing=south] x1
+  @> = spruce_shelf[facing=east] x2
+  ?^ = anvil x1
+  ;; = cauldron x1
+  :: = crafting_table x1
+  '' = dark_oak_pressure_plate x1
+  "" = dirt x1
+  `` = fletching_table x1
+  (( = gravel x1
+  )^ = grindstone x1
+  [> = lectern[facing=east] x1
+  ]] = potted_azalea_bush x1
+  {> = red_wall_banner[facing=east] x1
+  }} = smithing_table x1
+  \v = smoker[facing=south] x1
+  nn = water_cauldron x1
+LAYER y=0
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,,|
+z= -2 |,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,, ,,|
+z= -1 |,, ,, ,, ,, FF VV FF FF VV FF FF FF VV FF FF PP ,, ,, ,, ,, ,,|
+z=  0 |,, ,, ,, ,, VV .. FF HH PP FF HH HH FF FF FF PP ,, ,, ,, ,, ,,|
+z=  1 |,, ,, ,, ,, FF PP FF HH HH HH HH FF PP HH FF FF ,, ,, ,, ,, ,,|
+z=  2 |,, ,, ,, ,, FF HH FF FF FF FF FF HH FF FF PP FF ,, ,, ,, ,, ,,|
+z=  3 |,, ,, ,, ,, FF FF FF FF FF HH FF PP FF HH HH FF ,, ,, ,, ,, ,,|
+z=  4 |,, ,, ,, ,, FF HH HH FF HH PP FF FF PP HH FF FF ,, ,, ,, ,, ,,|
+z=  5 |,, ,, ,, ,, PP FF FF HH FF FF FF HH FF FF FF PP ,, ,, ,, ,, ,,|
+z=  6 |,, ,, ,, ,, PP FF HH FF FF FF FF HH HH FF FF FF ,, ,, ,, ,, ,,|
+z=  7 |,, ,, ,, ,, PP FF FF FF FF FF FF HH FF FF HH FF ,, ,, ,, ,, ,,|
+z=  8 |,, VV PP FF FF PP HH PP FF FF FF FF HH HH FF FF ,, ,, ,, ,, ,,|
+z=  9 |,, FF 99 VV VV FF FF FF FF PP FF FF FF FF HH FF ,, ,, ,, ,, ,,|
+z= 10 |,, FF VV PP FF FF FF FF PP Is Is FF FF FF FF VV ,, ,, ,, ,, ,,|
+z= 11 |,, FF FF FF ,, "" pp pp ,, YY YY ,, pp pp pp ,, ZZ ZZ ZZ ZZ ,,|
+z= 12 |,, ,, ,, ,, ,, ,, ,, ,, ,, YY YY ,, ,, ,, ,, ,, ZZ 99 ZZ ZZ ,,|
+z= 13 |,, ,, ,, ,, ,, ,, ,, ,, ,, YY YY ,, ,, ,, ,, ,, ZZ ZZ ZZ ZZ ,,|
+z= 14 |,, ,, ,, ,, ,, ,, ,, ,, ,, YY YY ,, ,, ,, ,, ,, ,, ,, ,, ,, ,,|
+z= 15 |,, ,, ,, ,, ,, ,, ,, ,, ,, (( YY ,, ,, ,, ,, ,, ,, ,, ,, ,, ,,|
+z= 16 |,, ,, ,, ,, ,, ,, ,, ,, ,, YY YY ,, ,, ,, ,, ,, ,, ,, ,, ,, ,,|
+LAYER y=1
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |SS .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. GG|
+z= -2 |GG .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. SS|
+z= -1 |GG .. .. .. FF I^ Iv Iv Iv Iv Iv Iv Iv Iv I^ FF .. .. .. .. GG|
+z=  0 |GG .. .. .. I< EE EE EE EE EE EE EE EE EE EE I> .. .. .. .. SS|
+z=  1 |GG .. .. .. I> EE HH HH CC CC CC CC CC CC EE I< .. .. .. .. GG|
+z=  2 |SS .. .. .. I> EE HH HH CC CC CC CC CC CC EE I< .. .. .. .. GG|
+z=  3 |GG rr .. .. I> EE && && CC CC CC CC CC CC EE I> R- .. RR .. SS|
+z=  4 |SS .. .. .. I> EE CC CC CC CC CC CC CC CC EE I> R- .. .. .. GG|
+z=  5 |GG .. .. .. I> EE CC CC CC CC CC CC CC CC EE I> R- bb .. .. SS|
+z=  6 |GG .. .. .. I> EE CC CC CC CC CC CC CC CC EE I> SS SS .. 77 SS|
+z=  7 |GG .. .. .. I> EE CC CC CC CC CC CC CC CC EE I> SS SS SS .. GG|
+z=  8 |GG FF FF FF I< EE CC CC CC CC CC CC CC CC EE I> SS SS .. .. GG|
+z=  9 |GG PP 99 FF I< EE EE EE EE EE EE EE EE EE EE I> .. .. WW .. SS|
+z= 10 |GG VV FF PP FF Iv I^ I^ Iv I^ I^ Iv I^ I^ Iv FF .. 00 gg WW GG|
+z= 11 |OO .. gg .. nn kk zz 33 MM .. .. MM oo kk zz WW 44 xx 44 88 OO|
+z= 12 |OO WW 00 WW gg oo zz B^ B^ .. .. q_ .. MM 33 U^ xx .. xx 44 OO|
+z= 13 |OO 77 WW 77 WW .. WW .. q_ .. .. WW WW .. .. ## 88 88 44 xx OO|
+z= 14 |RR OO OO OO OO OO OO OO OO %v %v OO OO OO OO OO OO OO OO OO RR|
+z= 15 |.. .. .. .. .. .. .. .. q_ .. .. q_ .. .. .. .. .. .. .. WW ..|
+z= 16 |.. .. .. .. .. .. .. 00 q_ .. .. gg WW 00 .. .. .. .. .. .. ..|
+LAYER y=2
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. .. .. Js .. .. .. .. Js .. .. .. .. .. .. .. ..|
+z=  0 |.. .. .. .. .. AA DD DD AA DD DD AA DD DD AA .. .. .. .. .. ..|
+z=  1 |.. .. .. .. .. DD HH HH c> ## ;; :: \v U^ DD .. .. .. .. .. ..|
+z=  2 |.. .. .. .. .. AA j^ j^ R- .. .. .. .. U^ AA .. .. .. .. .. ..|
+z=  3 |.. rr .. .. Je DD .. ll B^ ll ll .. f< U^ DD R- R- .. RR .. ..|
+z=  4 |.. .. .. .. .. DD @> B< MM MM B> .. .. .. DD R- R- .. .. .. ..|
+z=  5 |.. .. .. .. .. AA @> ll Bv ll ll .. .. .. AA R- R- .. .. .. ..|
+z=  6 |.. .. .. .. Je DD f> .. .. .. .. .. .. B> DD Jw .. SS .. .. ..|
+z=  7 |.. .. .. .. .. DD .. .. .. .. .. .. CC B< DD .. SS SS .. .. ..|
+z=  8 |.. FF VV FF .. AA Bv Bv Bv ii ii .. B^ .. AA .. .. .. .. .. ..|
+z=  9 |.. VV .. FF .. AA DD DD AA 1^ 1^ AA DD DD AA .. .. .. .. .. ..|
+z= 10 |.. PP FF FF .. .. .. Jn .. .. .. .. Jn .. .. .. .. .. gg .. ..|
+z= 11 |.. .. gg .. .. .. .. .. MM Qh Qh MM .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. gg .. .. Kv Kv .. .. .. .. MM .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |RR .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. RR|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. gg .. .. .. .. .. .. .. .. ..|
+LAYER y=3
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. .. K^ .. K^ .. .. K^ .. K^ .. .. .. .. .. .. ..|
+z=  0 |.. .. .. .. .. AA DD NN AA DD DD AA NN DD AA .. .. .. .. .. ..|
+z=  1 |.. .. .. .. .. DD HH HH c> .. .. .. .. mm DD .. .. .. .. .. ..|
+z=  2 |.. .. .. .. K< AA L~ L~ .. .. .. .. .. .. AA K> .. .. .. .. ..|
+z=  3 |.. rr .. .. oo NN .. .. .. .. Qh .. .. QQ NN .. .. .. RR .. ..|
+z=  4 |.. .. .. .. K< DD mm .. 6_ Qh .. .. .. .. DD K> R- .. .. .. ..|
+z=  5 |.. .. .. .. K< AA ** .. .. .. .. .. .. .. AA K> R- .. .. .. ..|
+z=  6 |.. .. .. .. .. NN .. Qh .. .. .. .. Qh .. NN .. .. .. .. .. ..|
+z=  7 |.. .. .. .. K< DD 6> .. .. .. .. .. B^ .. DD K> .. .. .. .. ..|
+z=  8 |.. MM .. MM .. AA 6> .. .. .. .. .. .. .. AA .. .. .. .. .. ..|
+z=  9 |.. .. .. QQ .. AA DD NN AA 1^ 1^ AA NN DD AA .. .. .. .. .. ..|
+z= 10 |.. MM .. MM .. .. Kv kk Kv .. .. Kv 33 Kv .. .. .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. MM 22 22 MM .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. MM .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |QQ .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. QQ|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=4
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. Js .. .. Js .. .. Js .. .. Js .. .. .. .. .. ..|
+z=  0 |.. .. .. .. Je A/ A- A- A- A- A- A- A- A- A/ Jw .. .. .. .. ..|
+z=  1 |.. .. .. .. .. A/ yy yy c> .. $$ $$ Qh .. A/ .. .. .. .. .. ..|
+z=  2 |TT TT TT .. .. A/ yy yy .. .. .. .. .. .. A/ .. .. .. .. .. ..|
+z=  3 |TT rr TT .. Je A/ A- A- A- A- A- A- A- A- A/ Jw .. .. RR .. ..|
+z=  4 |TT TT TT .. .. A/ .. .. .. 22 .. .. .. .. A/ .. .. .. .. .. ..|
+z=  5 |.. .. .. .. .. A/ .. .. .. .. .. .. .. .. A/ .. .. .. .. .. ..|
+z=  6 |.. .. .. .. Je A/ A- A- A- A- A- A- B^ A- A/ Jw .. .. .. .. ..|
+z=  7 |.. .. .. .. .. A/ .. .. .. .. .. .. .. .. A/ .. .. .. .. .. ..|
+z=  8 |.. MM .. MM .. A/ .. .. .. .. .. .. .. .. A/ .. .. .. .. .. ..|
+z=  9 |.. .. .. .. Je A/ A- A- A- A- A- A- A- A- A/ Jw .. .. .. .. ..|
+z= 10 |.. MM .. MM .. Jn Jn Jn Bs Bs Bs Bs Jn Jn Jn .. .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. Bs Bs Bs Bs .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. QQ .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=5
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. A/ A- A- A- A- A- A- A- A- A- A- A/ .. .. .. .. ..|
+z=  0 |.. .. .. .. A/ EE EE EE EE EE EE EE EE EE EE A/ .. .. .. .. ..|
+z=  1 |.. .. .. .. A/ EE HH HH c> EE EE EE EE EE EE A/ .. .. .. .. ..|
+z=  2 |TT TT TT .. A/ EE aa HH EE EE EE EE EE EE EE A/ .. GG GG GG ..|
+z=  3 |TT TT TT .. A/ EE EE EE EE EE EE EE EE EE EE A/ .. GG GG GG ..|
+z=  4 |TT TT TT .. A/ EE EE EE EE EE EE EE EE EE EE A/ .. GG GG GG ..|
+z=  5 |.. .. .. .. A/ EE EE EE EE EE EE EE B^ EE EE A/ .. .. .. .. ..|
+z=  6 |.. .. .. .. A/ EE EE EE EE EE EE .. .. EE EE A/ .. .. .. .. ..|
+z=  7 |.. .. .. .. A/ EE EE EE EE EE EE .. .. EE EE A/ .. .. .. .. ..|
+z=  8 |.. Bv Bv Bv A/ EE EE EE EE EE EE EE EE EE EE A/ .. .. .. .. ..|
+z=  9 |.. B> CC B< A/ EE EE EE EE EE EE EE EE EE EE A/ .. .. .. .. ..|
+z= 10 |.. B^ B^ B^ A/ A- A- A- A- A- A- A- A- A- A- A/ .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=6
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. Js .. .. .. .. Js .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. AA DD AA DD AA DD DD AA DD DD AA AA .. .. .. .. ..|
+z=  0 |.. .. .. .. DD fv .. .. .. .. .. tt tt `` }} DD .. .. .. .. ..|
+z=  1 |.. .. .. .. AA .. HH HH c> .. .. .. .. .. f< AA .. GG GG GG ..|
+z=  2 |.. .. .. .. DD .. HH aa +v U^ .. .. .. U^ )^ DD .. GG GG GG GG|
+z=  3 |.. TT .. Je DD .. .. .. +v U^ .. ?^ .. .. U^ DD Jw GG GG GG GG|
+z=  4 |.. .. .. .. DD .. tt ii ii .. ** .. .. .. .. DD .. GG GG GG GG|
+z=  5 |.. .. .. .. AA .. tt ii ii .. .. MM .. .. .. AA .. GG GG GG ..|
+z=  6 |.. .. .. .. DD mm .. B< MM B> MM .. .. MM .. DD .. .. .. .. ..|
+z=  7 |.. .. .. Je DD [> B> .. .. .. MM .. .. MM .. DD Jw .. .. .. ..|
+z=  8 |.. .. .. .. DD f> .. .. .. .. .. MM MM .. .. DD .. .. .. .. ..|
+z=  9 |.. .. L_ .. AA .. .. .. .. .. U^ .. .. .. .. AA .. .. .. .. ..|
+z= 10 |.. .. .. .. AA DD AA DD AA DD DD AA DD DD AA AA .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. Jn .. Jn .. .. Jn .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=7
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. K^ kk K^ .. .. K^ oo K^ .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. AA DD AA NN AA DD DD AA NN DD AA AA .. .. .. .. ..|
+z=  0 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  1 |.. .. .. .. AA .. HH HH c> .. .. .. .. .. .. AA .. GG GG GG ..|
+z=  2 |.. .. .. K< DD .. HH aa .. mm .. .. .. ]] .. DD K> GG GG GG GG|
+z=  3 |.. .. .. zz NN .. .. .. .. mm .. .. .. .. .. NN kk GG GG GG GG|
+z=  4 |.. .. .. K< DD {> .. .. .. .. .. .. .. .. .. DD K> GG GG GG GG|
+z=  5 |.. .. .. .. AA .. .. .. .. .. .. .. .. .. .. AA .. GG GG GG ..|
+z=  6 |.. .. .. K< DD .. .. .. '' .. .. .. .. .. .. DD K> .. .. .. ..|
+z=  7 |.. .. .. .. NN .. .. .. .. .. .. .. .. .. .. NN .. .. .. .. ..|
+z=  8 |.. .. .. K< DD .. .. .. .. .. .. .. .. .. .. DD K> .. .. .. ..|
+z=  9 |.. .. .. .. AA .. .. .. .. .. .. .. .. .. .. AA .. .. .. .. ..|
+z= 10 |.. .. .. .. AA DD AA NN AA NN DD AA NN DD AA AA .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. Kv kk Kv 33 Kv Kv oo Kv .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=8
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. AA DD AA DD AA DD DD AA DD DD AA AA .. .. .. .. ..|
+z=  0 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  1 |.. .. .. .. AA .. HH HH c> .. .. .. .. .. .. AA .. GG GG GG ..|
+z=  2 |.. .. .. .. DD .. HH HH .. .. .. .. .. .. .. DD .. GG GG GG GG|
+z=  3 |.. .. .. .. DD .. .. .. .. .. .. .. .. Qh .. DD .. GG GG GG GG|
+z=  4 |.. .. .. .. DD .. .. Qh .. .. .. .. .. .. .. DD .. GG GG GG GG|
+z=  5 |.. .. .. .. AA .. .. .. .. .. .. .. .. .. .. AA .. GG GG GG ..|
+z=  6 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  7 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  8 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  9 |.. .. .. .. AA .. .. .. .. .. .. .. .. .. .. AA .. .. .. .. ..|
+z= 10 |.. .. .. .. AA DD AA DD AA DD DD AA DD DD AA AA .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. J^ .. J^ .. .. J^ .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=9
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. A/ A- A- A- A- A- A- A- A- A- A- A/ .. .. .. .. ..|
+z=  0 |.. .. .. .. A/ .. .. .. .. .. .. .. .. .. .. A/ .. .. .. .. ..|
+z=  1 |.. .. .. .. A/ .. HH HH c> .. .. .. .. Qh .. A/ .. .. .. .. ..|
+z=  2 |.. .. .. .. A/ .. HH HH .. Qh .. .. .. .. .. A/ .. GG GG GG ..|
+z=  3 |.. .. .. .. A/ A- A- A- A- A- A- A- A- A- A- A/ .. GG GG GG ..|
+z=  4 |.. .. .. .. A/ .. .. 22 .. .. .. .. .. .. .. A/ .. GG GG GG ..|
+z=  5 |.. .. .. .. A/ .. .. Qh .. .. .. .. .. .. .. A/ .. .. .. .. ..|
+z=  6 |.. .. .. .. A/ A- A- A- A- A- A- A- A- A- A- A/ .. .. .. .. ..|
+z=  7 |.. .. .. .. A/ .. .. .. .. Qh .. .. .. .. .. A/ .. .. .. .. ..|
+z=  8 |.. .. .. .. A/ .. .. .. .. .. .. .. .. .. .. A/ .. .. .. .. ..|
+z=  9 |.. .. .. .. A/ .. .. .. .. .. .. .. .. .. .. A/ .. .. .. .. ..|
+z= 10 |.. .. .. .. A/ A- A- A- A- A- A- A- A- A- A- A/ .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=10
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. A/ Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv A/ .. .. .. ..|
+z= -1 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z=  0 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z=  1 |.. .. .. A/ DD CC HH HH c> CC CC CC CC CC CC DD A/ .. .. .. ..|
+z=  2 |.. .. .. A/ A- A- A- A- A- A- A- A- A- A- A- A- A/ .. .. .. ..|
+z=  3 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z=  4 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z=  5 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z=  6 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z=  7 |.. .. .. A/ A- A- A- A- A- A- A- A- A- A- A- A- A/ .. .. .. ..|
+z=  8 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z=  9 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z= 10 |.. .. .. A/ DD CC CC CC CC CC CC CC CC CC CC DD A/ .. .. .. ..|
+z= 11 |.. .. .. A/ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ A/ .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=11
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv .. .. .. ..|
+z=  0 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  1 |.. .. .. .. DD .. HH HH c> .. .. .. .. .. f< DD .. .. .. .. ..|
+z=  2 |.. .. .. AA DD .. HH HH .. .. .. .. .. mm .. DD AA .. .. .. ..|
+z=  3 |.. .. .. .. DD .. .. fv .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  4 |.. .. .. .. DD U^ bb .. Qh .. .. .. Qh .. .. DD .. .. .. .. ..|
+z=  5 |.. .. .. .. DD U^ f> .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  6 |.. .. .. .. DD U^ bb .. .. .. .. .. .. .. U^ DD .. .. .. .. ..|
+z=  7 |.. .. .. .. DD bb bb .. .. .. .. .. .. U^ U^ DD .. .. .. .. ..|
+z=  8 |.. .. .. AA DD .. .. .. .. .. .. .. .. 55 55 DD AA .. .. .. ..|
+z=  9 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z= 10 |.. .. .. B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=12
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  0 |.. .. .. Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv .. .. .. ..|
+z=  1 |.. .. .. .. DD .. HH HH .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  2 |.. .. .. AA DD .. HH aa .. .. .. .. .. .. .. DD AA .. .. .. ..|
+z=  3 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  4 |.. .. .. .. DD A- A- A- A- A- A- A- A- A- A- DD .. .. .. .. ..|
+z=  5 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  6 |.. .. .. .. DD bb .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  7 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  8 |.. .. .. AA DD .. .. .. .. .. .. .. .. .. 55 DD AA .. .. .. ..|
+z=  9 |.. .. .. B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ .. .. .. ..|
+z= 10 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=13
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  0 |.. .. .. .. .. FF HH HH HH .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  1 |.. .. .. Bv Bv HH HH FF FF Bv Bv Bv Bv Bv Bv Bv Bv .. .. .. ..|
+z=  2 |.. .. .. A/ DD aa HH HH FF .. .. .. .. .. .. DD A/ .. .. .. ..|
+z=  3 |.. .. .. A/ DD aa HH HH FF .. .. .. .. .. .. DD A/ .. .. .. ..|
+z=  4 |.. .. .. A/ DD .. .. .. .. .. .. .. .. .. .. DD A/ .. .. .. ..|
+z=  5 |.. .. .. A/ DD .. .. .. .. .. .. .. .. .. .. DD A/ .. .. .. ..|
+z=  6 |.. .. .. A/ DD .. .. .. .. .. .. .. .. .. .. DD A/ .. .. .. ..|
+z=  7 |.. .. .. A/ DD .. .. .. .. .. .. .. .. .. .. DD A/ .. .. .. ..|
+z=  8 |.. .. .. B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ .. .. .. ..|
+z=  9 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 10 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=14
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  0 |.. .. .. .. .. HH HH aa HH .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  1 |.. .. .. .. .. HH HH HH HH .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  2 |.. .. .. Bv Bv HH HH HH FF Bv Bv Bv Bv Bv Bv Bv Bv .. .. .. ..|
+z=  3 |.. .. .. .. DD HH aa aa FF .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  4 |.. .. .. .. NN .. .. .. .. .. .. .. .. .. .. DD NN .. .. .. ..|
+z=  5 |.. .. .. .. NN .. .. .. .. .. .. .. .. .. .. DD NN .. .. .. ..|
+z=  6 |.. .. .. .. DD .. .. .. .. .. .. .. .. .. .. DD .. .. .. .. ..|
+z=  7 |.. .. .. B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ .. .. .. ..|
+z=  8 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  9 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 10 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=15
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  0 |.. .. .. .. .. X~ X~ X~ X~ .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  1 |.. .. .. .. .. X~ HH aa X~ .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  2 |.. .. .. .. .. X~ HH HH X~ .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  3 |.. .. .. A/ Bv X~ X~ X~ X~ Bv Bv Bv Bv Bv Bv Bv A/ .. .. .. ..|
+z=  4 |.. .. .. .. NN CC CC CC CC CC CC CC CC CC CC CC NN .. .. .. ..|
+z=  5 |.. .. .. .. NN CC CC CC CC CC CC CC CC CC CC CC NN .. .. .. ..|
+z=  6 |.. .. .. A/ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ A/ .. .. .. ..|
+z=  7 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  8 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  9 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 10 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=16
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  0 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  1 |.. .. .. .. .. .. bb bb .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  2 |.. .. .. .. .. .. bb bb .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  4 |.. .. .. L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ .. .. .. ..|
+z=  5 |.. .. .. L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ .. .. .. ..|
+z=  6 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  7 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  8 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  9 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 10 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+LAYER y=17
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -2 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= -1 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  0 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  1 |.. .. .. .. .. .. j^ j^ .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  2 |.. .. .. .. .. .. j^ j^ .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  3 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  4 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  5 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  6 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  7 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  8 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z=  9 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 10 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 11 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 12 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 13 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 14 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 15 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+z= 16 |.. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. .. ..|
+ELEVATION VIEW FROM SOUTH - columns x left->right = west->east (front), top row = highest y
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+y= 17 |                  j^ j^|
+y= 16 |         L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~|
+y= 15 |         A/ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ A/|
+y= 14 |         B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^|
+y= 13 |         B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^|
+y= 12 |         B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^|
+y= 11 |         B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^|
+y= 10 |         A/ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ A/|
+y=  9 |            A/ A- A- A- A- A- A- A- A- A- A- A/    GG GG GG|
+y=  8 |            AA DD AA J^ AA J^ DD AA J^ DD AA AA    GG GG GG GG|
+y=  7 |         K< AA DD Kv kk Kv 33 Kv Kv oo Kv AA AA K> GG GG GG GG|
+y=  6 |   TT L_ Je AA DD AA Jn AA Jn DD AA Jn DD AA AA Jw GG GG GG GG|
+y=  5 |TT B^ B^ B^ A/ A- A- A- A- A- A- A- A- A- A- A/    GG GG GG|
+y=  4 |TT MM TT MM Je Jn Jn Jn Bs Bs Bs Bs Jn QQ Jn Jw       RR|
+y=  3 |QQ MM    MM K< AA Kv kk MM 22 22 MM 33 MM AA K> R-    RR    QQ|
+y=  2 |RR PP gg FF gg AA DD Kv Kv Qh Qh gg Jn MM AA Jw SS SS gg    RR|
+y=  1 |RR OO OO OO OO OO OO 00 q_ %v %v gg WW 00 OO OO OO OO OO WW RR|
+y=  0 |   FF FF FF FF "" pp pp PP YY YY FF pp pp pp VV ZZ ZZ ZZ ZZ|
+
+ELEVATION VIEW FROM NORTH - columns x left->right = east->west, top row = highest y
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+y= 17 |                                       j^ j^|
+y= 16 |            L~ L~ L~ L~ L~ L~ L~ L~ L~ bb bb L~ L~ L~|
+y= 15 |            A/ Bv Bv Bv Bv Bv Bv Bv X~ X~ X~ X~ Bv A/|
+y= 14 |            Bv Bv Bv Bv Bv Bv Bv Bv HH aa HH HH Bv Bv|
+y= 13 |            Bv Bv Bv Bv Bv Bv Bv Bv HH HH HH FF Bv Bv|
+y= 12 |            Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv|
+y= 11 |            Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv|
+y= 10 |            A/ Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv A/|
+y=  9 |   GG GG GG    A/ A- A- A- A- A- A- A- A- A- A- A/|
+y=  8 |GG GG GG GG    AA AA DD DD AA DD DD AA DD AA DD AA|
+y=  7 |GG GG GG GG K> AA AA K^ oo K^ DD DD K^ kk K^ DD AA K<|
+y=  6 |GG GG GG GG Jw AA AA DD Js AA DD DD AA Js AA DD AA Je L_ TT|
+y=  5 |   GG GG GG    A/ A- A- A- A- A- A- A- A- A- A- A/ Bv TT TT TT|
+y=  4 |      RR       Jw Js A- A- Js A- A- Js A- A- Js Je MM TT TT TT|
+y=  3 |QQ    RR    R- K> AA K^ NN K^ DD DD K^ NN K^ AA K< MM    rr QQ|
+y=  2 |RR    RR SS R- R- AA DD Js AA DD DD AA Js DD AA Je FF VV rr RR|
+y=  1 |GG 77 RR bb R- FF I^ Iv Iv Iv Iv Iv Iv Iv Iv I^ FF FF FF rr SS|
+y=  0 |   ZZ ZZ ZZ ZZ PP FF FF VV FF FF FF VV FF FF VV FF FF PP VV|
+
+ELEVATION VIEW FROM EAST - columns z left->right = north->south, top row = highest y
+       -  -  -                                1  1  1  1  1  1  1
+       3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6
+y= 17 |            j^ j^|
+y= 16 |            bb bb    L~ L~|
+y= 15 |         X~ X~ X~ A/ NN NN A/|
+y= 14 |         HH HH Bv DD NN NN DD B^|
+y= 13 |         HH Bv A/ A/ A/ A/ A/ A/ B^|
+y= 12 |         Bv DD AA DD DD DD DD DD AA B^|
+y= 11 |      Bv DD DD AA DD DD DD DD DD AA DD B^|
+y= 10 |   A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/|
+y=  9 |      A/ A/ A/ GG GG GG A/ A/ A/ A/ A/ A/|
+y=  8 |      AA DD GG GG GG GG GG DD DD DD AA AA J^|
+y=  7 |   K^ AA DD GG GG GG GG GG K> NN K> AA AA Kv|
+y=  6 |   Js AA DD GG GG GG GG GG DD Jw DD AA AA Jn|
+y=  5 |      A/ A/ A/ GG GG GG A/ A/ A/ A/ A/ A/|
+y=  4 |      Js Jw A/ A/ RR A/ A/ Jw A/ A/ Jw Jn Bs QQ|
+y=  3 |      K^ AA DD K> RR R- R- NN K> AA AA Kv MM MM    QQ|
+y=  2 |      Js AA DD AA RR R- R- SS SS AA AA gg MM MM    RR    gg|
+y=  1 |GG SS GG SS GG GG SS GG SS SS GG GG SS GG OO OO OO RR WW 00|
+y=  0 |      PP PP FF FF FF FF PP FF FF FF FF VV ZZ ZZ ZZ YY YY YY|
+
+ELEVATION VIEW FROM WEST - columns z left->right = south->north, top row = highest y
+       -  -  -                                1  1  1  1  1  1  1
+       3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5  6
+y= 17 |                                          j^ j^|
+y= 16 |                                 L~ L~    bb bb|
+y= 15 |                              A/ NN NN A/ X~ X~ X~|
+y= 14 |                           B^ DD NN NN DD Bv HH HH|
+y= 13 |                        B^ A/ A/ A/ A/ A/ A/ Bv FF|
+y= 12 |                     B^ AA DD DD DD DD DD AA DD Bv|
+y= 11 |                  B^ DD AA DD DD DD DD DD AA DD DD Bv|
+y= 10 |               A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/|
+y=  9 |                  A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/ A/|
+y=  8 |               J^ AA AA DD DD DD AA DD DD DD AA DD AA|
+y=  7 |               Kv AA AA K< NN K< AA K< zz K< AA DD AA K^|
+y=  6 |               Jn AA L_ DD Je DD AA DD TT DD AA DD AA Js|
+y=  5 |                  B^ B> Bv A/ A/ A/ TT TT TT A/ A/ A/|
+y=  4 |            QQ Bs MM Je MM A/ Je A/ TT TT TT A/ Je Js|
+y=  3 |      QQ    MM MM MM QQ MM K< NN K< K< rr K< DD AA K^|
+y=  2 |gg    RR    gg gg PP VV FF DD Je AA DD rr AA DD AA Js|
+y=  1 |00 q_ RR OO OO OO GG GG GG GG GG GG SS GG SS GG GG GG GG SS|
+y=  0 |YY (( YY YY YY FF FF FF VV PP PP PP FF FF FF FF VV FF|
+
+TOP VIEW (highest block per column; rows z, front/SOUTH is the last row)
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |SS                                                          GG|
+z= -2 |GG       A/ Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv A/          SS|
+z= -1 |GG       Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv Bv          GG|
+z=  0 |GG       Bv Bv X~ X~ X~ X~ Bv Bv Bv Bv Bv Bv Bv Bv          SS|
+z=  1 |GG       Bv Bv X~ j^ j^ X~ Bv Bv Bv Bv Bv Bv Bv Bv GG GG GG GG|
+z=  2 |TT TT TT Bv Bv X~ j^ j^ X~ Bv Bv Bv Bv Bv Bv Bv Bv GG GG GG GG|
+z=  3 |TT TT TT A/ Bv X~ X~ X~ X~ Bv Bv Bv Bv Bv Bv Bv A/ GG GG GG GG|
+z=  4 |TT TT TT L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ GG GG GG GG|
+z=  5 |GG       L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ L~ GG GG GG SS|
+z=  6 |GG       A/ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ A/ SS    77 SS|
+z=  7 |GG       B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ SS SS    GG|
+z=  8 |GG Bv Bv B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ SS       GG|
+z=  9 |GG B> L_ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^    WW    SS|
+z= 10 |GG B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ 00 gg WW GG|
+z= 11 |OO FF gg A/ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ B^ A/ xx 44 88 OO|
+z= 12 |OO WW 00 WW gg oo zz Kv Kv YY YY q_    QQ 33 U^ xx 99 xx 44 OO|
+z= 13 |OO 77 WW 77 WW    WW    q_ YY YY WW WW       ## 88 88 44 xx OO|
+z= 14 |QQ OO OO OO OO OO OO OO OO %v %v OO OO OO OO OO OO OO OO OO QQ|
+z= 15 |                        q_ (( YY q_                      WW|
+z= 16 |                     00 q_ YY YY gg WW 00|
+HEIGHT MAP (y of the highest block, base36)
+       -  -  -  -  -                                1  1  1  1  1  1
+       5  4  3  2  1  0  1  2  3  4  5  6  7  8  9  0  1  2  3  4  5
+z= -3 |1                                       1|
+z= -2 |1     A A A A A A A A A A A A A A       1|
+z= -1 |1     B B B B B B B B B B B B B B       1|
+z=  0 |1     C C F F F F C C C C C C C C       1|
+z=  1 |1     D D F H H F D D D D D D D D 8 8 8 1|
+z=  2 |5 5 5 E E F H H F E E E E E E E E 9 9 9 8|
+z=  3 |5 6 5 F F F F F F F F F F F F F F 9 9 9 8|
+z=  4 |5 5 5 G G G G G G G G G G G G G G 9 9 9 8|
+z=  5 |1     G G G G G G G G G G G G G G 8 8 8 1|
+z=  6 |1     F F F F F F F F F F F F F F 2   1 1|
+z=  7 |1     E E E E E E E E E E E E E E 2 1   1|
+z=  8 |1 5 5 D D D D D D D D D D D D D D 1     1|
+z=  9 |1 5 6 C C C C C C C C C C C C C C   1   1|
+z= 10 |1 5 5 B B B B B B B B B B B B B B 1 2 1 1|
+z= 11 |1 0 2 A A A A A A A A A A A A A A 1 1 1 1|
+z= 12 |1 1 1 1 2 1 1 2 2 0 0 1   4 1 1 1 0 1 1 1|
+z= 13 |1 1 1 1 1   1   1 0 0 1 1     1 1 1 1 1 1|
+z= 14 |3 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 1 3|
+z= 15 |                1 0 0 1               1|
+z= 16 |              1 1 0 0 2 1 1|

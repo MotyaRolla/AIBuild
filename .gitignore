@@ -1,0 +1,19 @@
+# secrets — never commit
+.cc_key
+.ptero_key
+.deploy_config.yml
+*.key
+secrets/
+
+# build output and local caches
+.build/
+.m2/
+.scratch/
+plugin/target/
+*.class
+
+# local server / panel helpers output
+logs/
+bench/
+.ptero_url
+.ptero_server
