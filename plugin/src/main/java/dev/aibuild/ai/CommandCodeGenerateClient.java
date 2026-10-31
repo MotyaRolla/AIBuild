@@ -296,12 +296,7 @@ public class CommandCodeGenerateClient extends AbstractStreamingClient {
             }
             JsonObject msg = new JsonObject();
             msg.addProperty("role", "assistant".equals(m.role()) ? "assistant" : "user");
-            JsonArray parts = new JsonArray();
-            JsonObject part = new JsonObject();
-            part.addProperty("type", "text");
-            part.addProperty("text", m.content());
-            parts.add(part);
-            msg.add("content", parts);
+            msg.add("content", m.contentParts().toPartsJson());
             messages.add(msg);
         }
         if (messages.isEmpty()) {

@@ -7,6 +7,7 @@ import dev.aibuild.build.BuildVersion;
 import dev.aibuild.config.BuildMode;
 import dev.aibuild.model.VoxelModel;
 import dev.aibuild.pipeline.BuildPipeline;
+import dev.aibuild.scene.SceneBuildJob;
 import dev.aibuild.pipeline.Job;
 import dev.aibuild.util.Msg;
 import dev.aibuild.world.PlacementMath;
@@ -60,6 +61,7 @@ public final class AIBuildCommand implements BasicCommand {
         try {
             switch (sub) {
                 case "create", "build", "new", "c", "создать" -> create(s, rest);
+                case "3d", "scene", "сцена" -> create3d(s, rest);
                 case "edit", "e", "change", "изменить" -> edit(s, rest);
                 case "chat" -> chat(s);
                 case "undo" -> undoRedo(s, rest, true);
@@ -144,6 +146,65 @@ public final class AIBuildCommand implements BasicCommand {
             out.add(t);
         }
         return new ModeArgs(mode, out.toArray(new String[0]));
+    }
+
+    /**
+     * {@code /aib 3d <описание>} — builds through the 3D pipeline.
+     *
+     * <p>Instead of asking the model for blocks, this designs a declarative scene (walls, roof, windows as
+     * primitives), renders pictures of it from several angles, lets the model critique those pictures and
+     * patch the scene, and repeats. Only the best version is transferred to blocks and placed. The AI
+     * therefore judges what the building looks like, not what its coordinates say, which is what fixes the
+     * "flat box" and "floating block" problems of the block-DSL pipeline.</p>
+     *
+     * <p>Runs fully asynchronously; the player gets one short progress line per iteration.</p>
+     *
+     * @param s the command sender (player, or console with {@code --at})
+     * @param a0 the arguments after the sub-command, starting with an optional {@code --mode} and anchor
+     */
+    private void create3d(CommandSender s, String[] a0) {
+        requireKey();
+        if (!plugin.cfg().sceneEnabled) throw new IllegalArgumentException("3D-режим выключен в config.yml (scene.enabled)");
+        ModeArgs ma = stripMode(a0);
+        String[] a = ma.rest();
+        BuildPipeline.Anchor anchor;
+        int start = 0;
+        if (a.length >= 6 && a[0].equalsIgnoreCase("--at")) {
+            World w = Bukkit.getWorld(a[1]);
+            if (w == null) throw new IllegalArgumentException("Мир не найден: " + a[1]);
+            int x = Integer.parseInt(a[2]);
+            Integer y = a[3].equals("~") ? null : Integer.parseInt(a[3]);
+            int z = Integer.parseInt(a[4]);
+            BlockFace f = BlockFace.valueOf(a[5].toUpperCase(Locale.ROOT));
+            anchor = new BuildPipeline.Anchor(w.getName(), x, y, z, PlacementMath.rotationForPlayerFacing(f));
+            start = 6;
+        } else if (s instanceof Player p) {
+            BlockFace f = PlacementMath.cardinal(p.getLocation().getYaw());
+            Location l = p.getLocation();
+            int d = plugin.cfg().distance + 1;
+            anchor = new BuildPipeline.Anchor(p.getWorld().getName(), l.getBlockX() + f.getModX() * d, null,
+                    l.getBlockZ() + f.getModZ() * d, PlacementMath.rotationForPlayerFacing(f));
+        } else {
+            throw new IllegalArgumentException("Из консоли: /aib 3d --at <мир> <x> <y|~> <z> <north|east|south|west> <описание>");
+        }
+        String prompt = String.join(" ", Arrays.copyOfRange(a, start, a.length)).trim();
+        if (prompt.isEmpty()) throw new IllegalArgumentException("Опишите постройку: /aib 3d <описание>");
+        UUID owner = s instanceof Player p ? p.getUniqueId() : null;
+        checkJobLimits(owner);
+        Build b = plugin.store().create(owner, s.getName(), anchor.world());
+        b.originalPrompt = prompt;
+        b.name = "3D-постройка";
+        BuildMode mode = ma.mode() == null ? plugin.cfg().mode(plugin.cfg().defaultMode) : ma.mode();
+        SceneBuildJob job = new SceneBuildJob(plugin, plugin.cfg(), plugin.llm(), plugin.placer(), plugin.store(), s, anchor, b);
+        plugin.sceneJobs().put(b.id, job);
+        Msg.send(s, "<aqua>[AIBuild 3D]</aqua> <gray>проектирую сцену, потом буду рисовать превью и улучшать по картинкам…</gray>");
+        try {
+            job.start(prompt, mode, plugin.cfg().sceneMaxIterations);
+        } catch (RuntimeException e) {
+            plugin.sceneJobs().remove(b.id);
+            throw e;
+        }
+        Msg.send(s, "<aqua>[AIBuild 3D]</aqua> <gray>постройка <v0> — отменить: /aib cancel <v0></gray>", b.id);
     }
 
     private void create(CommandSender s, String[] a0) {

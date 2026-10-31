@@ -49,6 +49,8 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
     private volatile PluginConfig config;
     private BukkitBlockInfo blockInfo;
     private volatile LlmClient llm;
+    private final java.util.Map<String, dev.aibuild.scene.SceneBuildJob> sceneJobs =
+            new java.util.concurrent.ConcurrentHashMap<>();
     private BuildStore store;
     private WorldPlacer placer;
     private BuildPipeline pipeline;
@@ -141,6 +143,31 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
 
     public String llmName() {
         return llm.name();
+    }
+
+    /**
+     * The shared LLM client (thread-safe, one per plugin instance).
+     *
+     * <p>Exposed for the 3D scene pipeline, which runs its own iteration loop: it needs to call the model with
+     * attached pictures, something the block pipeline never does. Callers must not close or reconfigure it.</p>
+     *
+     * @return the client, never {@code null} once the plugin is enabled
+     */
+    public LlmClient llm() {
+        return llm;
+    }
+
+    /**
+     * Active 3D scene jobs by build id.
+     *
+     * <p>Kept separate from {@link BuildPipeline#jobs()} because scene jobs are a different mechanism: they
+     * iterate on a scene and only place at the end, so they do not fit the block-diff job model. The command
+     * layer uses this map for {@code /aib cancel} and for the task limit.</p>
+     *
+     * @return the live map; callers may add and remove entries
+     */
+    public java.util.Map<String, dev.aibuild.scene.SceneBuildJob> sceneJobs() {
+        return sceneJobs;
     }
 
     // ------------------------------------------------------------------ thinking modes

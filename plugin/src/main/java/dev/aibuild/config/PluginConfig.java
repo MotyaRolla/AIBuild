@@ -44,6 +44,18 @@ public final class PluginConfig {
 
     public final boolean saveTranscripts;
 
+    /** 3D pipeline: design in a declarative scene, iterate on rendered pictures, then place. */
+    public final boolean sceneEnabled;
+    /** Maximum design iterations for one 3D build (each iteration = render + critique + patch). */
+    public final int sceneMaxIterations;
+    /** Score gain below which two consecutive iterations stop the loop. */
+    public final int sceneScoreGain;
+    /** Render size of the critique pictures. */
+    public final int sceneRenderWidth;
+    public final int sceneRenderHeight;
+    /** Render supersampling for the final picture (1 = off, 2 = antialiased). */
+    public final int sceneSupersample;
+
     public PluginConfig(FileConfiguration c) {
         String key = c.getString("api.key", "");
         if (key == null || key.isBlank()) key = System.getenv().getOrDefault("COMMANDCODE_API_KEY", System.getenv().getOrDefault("COMMAND_CODE_API_KEY", ""));
@@ -107,6 +119,13 @@ public final class PluginConfig {
         maxFoundationDepth = Math.max(0, c.getInt("placement.max-foundation-depth", 12));
 
         saveTranscripts = c.getBoolean("debug.save-transcripts", true);
+
+        sceneEnabled = c.getBoolean("scene.enabled", true);
+        sceneMaxIterations = Math.max(1, Math.min(20, c.getInt("scene.max-iterations", 8)));
+        sceneScoreGain = Math.max(0, Math.min(20, c.getInt("scene.score-gain", 3)));
+        sceneRenderWidth = Math.max(128, Math.min(1280, c.getInt("scene.render-width", 512)));
+        sceneRenderHeight = Math.max(96, Math.min(960, c.getInt("scene.render-height", 384)));
+        sceneSupersample = Math.max(1, Math.min(3, c.getInt("scene.supersample", 2)));
     }
 
     /** The mode for an id (any alias), falling back to the default mode. */

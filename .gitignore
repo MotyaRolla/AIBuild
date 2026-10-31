@@ -28,3 +28,6 @@ three/node_modules/
 three/out/
 .npm-cache/
 three/out/
+.build/
+.scratch/
+three/out/

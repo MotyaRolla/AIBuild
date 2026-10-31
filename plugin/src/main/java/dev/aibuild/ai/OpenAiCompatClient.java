@@ -198,6 +198,10 @@ public class OpenAiCompatClient extends AbstractStreamingClient {
     /**
      * Serialises the request into the OpenAI chat-completions JSON shape.
      *
+     * <p>Each message is encoded by {@link ChatMessage#toJson()}: text-only messages keep the plain
+     * string {@code content} they always had, vision messages become an array of typed content parts
+     * ({@code text} + {@code image_url} data URLs).</p>
+     *
      * @param req the request
      * @return JSON text
      */
@@ -206,10 +210,7 @@ public class OpenAiCompatClient extends AbstractStreamingClient {
         root.addProperty("model", req.model());
         JsonArray msgs = new JsonArray();
         for (ChatMessage m : req.messages()) {
-            JsonObject o = new JsonObject();
-            o.addProperty("role", m.role());
-            o.addProperty("content", m.content());
-            msgs.add(o);
+            msgs.add(m.toJson());
         }
         root.add("messages", msgs);
         root.addProperty("max_tokens", req.maxTokens());
