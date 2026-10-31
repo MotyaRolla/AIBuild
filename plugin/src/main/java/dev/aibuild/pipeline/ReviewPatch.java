@@ -10,6 +10,14 @@ import java.util.Set;
 final class ReviewPatch {
     record Result(int changed, int conflicts) { }
 
+    static int changedCells(VoxelModel before, VoxelModel after) {
+        Set<Long> keys = new HashSet<>(before.entries().keySet());
+        keys.addAll(after.entries().keySet());
+        int count = 0;
+        for (long key : keys) if (!Objects.equals(before.entries().get(key), after.entries().get(key))) count++;
+        return count;
+    }
+
     static Result merge(VoxelModel snapshot, VoxelModel proposed, VoxelModel current) {
         Set<Long> keys = new HashSet<>(snapshot.entries().keySet());
         keys.addAll(proposed.entries().keySet());

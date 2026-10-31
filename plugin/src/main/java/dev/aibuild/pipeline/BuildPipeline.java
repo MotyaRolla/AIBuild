@@ -559,6 +559,25 @@ public final class BuildPipeline {
         AnalysisReport finalReport;
         final JsonObject quality = new JsonObject();
         final Map<String,String> blockers = new java.util.LinkedHashMap<>();
+        final JsonArray reviewContexts = new JsonArray();
+
+        void finishAnalysis(AnalysisReport report) {
+            finalReport = report;
+            blockers.keySet().removeIf(key -> key.startsWith("analyzer:"));
+            if (report == null) return;
+            int index = 0;
+            for (var issue : report.issues) {
+                if (issue.severity() != dev.aibuild.analysis.Severity.CRITICAL
+                        && issue.severity() != dev.aibuild.analysis.Severity.MAJOR) continue;
+                blockers.put("analyzer:" + issue.code() + ":" + index++, issue.toLine());
+            }
+            if (report.hasBlocking()) approved = false;
+        }
+
+        String failureReason() {
+            if (!blockers.isEmpty()) return String.join("; ", blockers.values());
+            return "Review acceptance incomplete; checklist " + checklist;
+        }
     }
 
     /**
@@ -597,15 +616,18 @@ public final class BuildPipeline {
         double span = (0.97 - p0) / Math.max(1, cap);
         int round = 0;
         boolean stalled = false;
+        ReviewSchedule schedule = new ReviewSchedule();
+        VoxelModel previousReview = null;
+        List<int[]> pendingRegions = List.of();
         while (round < cap) {
             checkCancelled(job);
             AnalysisReport rep = StructureAnalyzer.analyze(model, info, aopts);
             List<String> active = new ArrayList<>();
             for (Map.Entry<String, Boolean> e : finished.entrySet()) if (!e.getValue()) active.add(e.getKey());
             if (active.isEmpty()) {
-                boolean critical = rep.count(dev.aibuild.analysis.Severity.CRITICAL) > 0;
+                boolean critical = rep.hasBlocking();
                 List<String> open = cl.openAreas();
-                if (open.isEmpty() && !critical) break; // every reviewer is satisfied and everything is verified
+                if (open.isEmpty() && !critical && schedule.assessedCurrentModel()) break;
                 for (String a : open) {
                     String r = roles.contains(a) ? a : roles.contains("structure") ? "structure" : roles.get(0);
                     finished.put(r, false);
@@ -618,7 +640,19 @@ public final class BuildPipeline {
             round++;
             job.status("Самопроверка ИИ, раунд " + round + " · чек-лист " + cl.progress() + " · экспертов в работе "
                     + active.size() + "/" + roles.size(), p0 + span * (round - 1));
-            String render = render(model);
+            ReviewContext context = ReviewContext.create(model, previousReview, info, rep,
+                    schedule.requireFull(round, cap) || round > 1 && cl.allVerified(), pendingRegions);
+            job.status((context.full ? "Общая проверка ИИ" : "Проверка исправлений ИИ") + ", раунд " + round
+                    + " · чек-лист " + cl.progress(), p0 + span * (round - 1));
+            String render = context.text;
+            JsonObject contextMetric = new JsonObject();
+            contextMetric.addProperty("round", round);
+            contextMetric.addProperty("scope", context.full ? "full" : "focused");
+            contextMetric.addProperty("characters", render.length());
+            contextMetric.addProperty("fullCharacters", context.fullCharacters);
+            contextMetric.addProperty("reason", context.reason);
+            v.reviewContexts.add(contextMetric);
+            tr.note("areview" + round + " context", Json.GSON.toJson(contextMetric));
             String analysis = withAutoNotes(job, rep.toText());
             String hist = String.join("\n", history.subList(Math.max(0, history.size() - roles.size()*2), history.size()));
             String effort = round == 1 ? job.mode.effortReview : job.mode.effortReviewFollowup;
@@ -642,17 +676,22 @@ public final class BuildPipeline {
                     }
                 }
                 String checklistText = cl.render(role.equals("all") || role.equals("change") ? null : role);
-                String user = Prompts.reviewAdaptive(title, instr, request, planText, round, render, analysis, checklistText, hist, c.minScore);
+                String user = Prompts.reviewAdaptive(title, instr, request, planText, round, render, analysis,
+                        checklistText, hist, c.minScore) + Prompts.reviewScope(context.full);
                 String tag = "areview" + round + "-" + role;
                 tags.add(tag);
                 futures.add(side.submit(() -> callJson(job, tr, tag, effort, user)));
             }
             int changed = 0, issues = 0;
             VoxelModel reviewSnapshot = model.copy();
+            List<int[]> nextRegions = new ArrayList<>();
+            boolean requestFull = false;
             Map<String,JsonArray> roundProofs = new java.util.LinkedHashMap<>();
             for (int k = 0; k < futures.size(); k++) {
                 String role = active.get(k);
                 JsonObject res = await(futures.get(k), job);
+                requestFull |= Json.bool(res, "needs_full_review", false);
+                nextRegions.addAll(ReviewContext.issueRegions(res));
                 v.reviewerCalls++;
                 VoxelModel proposed = reviewSnapshot.copy();
                 int baseBlocks = Math.max(1, reviewSnapshot.nonAirCount());
@@ -665,6 +704,13 @@ public final class BuildPipeline {
                     continue;
                 }
                 postProcess(job, proposed);
+                if (!context.permits(reviewSnapshot, proposed)) {
+                    finished.put(role, false);
+                    requestFull = true;
+                    v.blockers.put(role, "repair outside inspected region; full assessment required");
+                    history.add("round " + round + " " + role + ": patch rejected outside supplied regions; inspect full model next round");
+                    continue;
+                }
                 AnalysisReport candidateReport=StructureAnalyzer.analyze(proposed,info,aopts);
                 if (r.opsFailed>0 || ReviewDecision.introducesBlocking(rep,candidateReport)) {
                     finished.put(role,false);
@@ -690,7 +736,8 @@ public final class BuildPipeline {
                 JsonObject assessment=Json.obj(res,"quality");
                 if (assessment!=null) v.quality.add(role,assessment.deepCopy());
                 boolean fin = failed == 0 && ReviewDecision.canFinish(res, proofs.checked(),role,c.minScore,
-                        r.opsFailed,merged.conflicts(),cl.allVerified(role),proven);
+                        r.opsFailed,merged.conflicts(),cl.allVerified(role),proven)
+                        && (!context.full || cl.coveredBy(proofs.checked(),role));
                 if (!qualityFailures.isEmpty()) history.add("round "+round+" "+role+" quality remains: "+String.join("; ",qualityFailures));
                 finished.put(role, fin);
                 if (fin) v.blockers.remove(role);
@@ -698,6 +745,7 @@ public final class BuildPipeline {
                     List<String> pending=new ArrayList<>(qualityFailures);
                     if (ReviewDecision.hasUnresolvedSerious(res,proofs.checked())) pending.add("unresolved critical/major reviewer finding");
                     if (!cl.allVerified(role)) pending.add("checklist not fully verified");
+                    if (context.full && !cl.coveredBy(proofs.checked(),role)) pending.add("whole-build assessment omitted checklist items");
                     if (merged.conflicts()>0) pending.add("conflicting repair needs inspection");
                     if (sc<c.minScore) pending.add("score below acceptance threshold");
                     v.blockers.put(role,pending.isEmpty()?"reviewer has not verified completion":String.join("; ",pending));
@@ -715,6 +763,9 @@ public final class BuildPipeline {
                         + (dis.isEmpty() ? "" : ", dismissed: " + dis.toString().trim()) + " - " + clip(sm, 160));
             }
             postProcess(job,model);
+            changed = ReviewPatch.changedCells(reviewSnapshot, model);
+            previousReview = reviewSnapshot;
+            pendingRegions = nextRegions;
             for (var entry : roundProofs.entrySet()) {
                 PatchProofs.Result finalProofs = PatchProofs.verify(entry.getValue(),model,info);
                 if (cl.apply(finalProofs.checked(),round,entry.getKey())>0) finished.put(entry.getKey(),false);
@@ -723,23 +774,32 @@ public final class BuildPipeline {
             v.issuesFixed += issues;
             int fin = 0;
             for (boolean b : finished.values()) if (b) fin++;
+            schedule.record(context.full, changed, fin == roles.size() && !(changed == 0 && rep.hasBlocking()), requestFull);
+            contextMetric.addProperty("changedCells", changed);
+            contextMetric.addProperty("wholeBuildAssessed", schedule.assessedCurrentModel());
+            if (!schedule.assessedCurrentModel()) {
+                finished.replaceAll((role, value) -> false);
+                v.blockers.put("review:whole", "final whole-build assessment of the current model is pending");
+            } else {
+                v.blockers.remove("review:whole");
+            }
             if (!lastScore.isEmpty()) v.score = (int) Math.round(lastScore.values().stream().mapToInt(Integer::intValue).average().orElse(-1));
-            say(job, "<gray>🔍 Проверка, раунд <white><v0></white>: чек-лист <v1>, экспертов завершило <v2>/<v3>, исправлено блоков <v4>, оценка <v5></gray>",
-                    round, cl.progress(), fin, roles.size(), changed, scoreColor(v.score));
+            say(job, "<gray>🔍 Проверка, раунд <white><v0></white>: чек-лист <v1>, экспертов завершило <v2>/<v3>, исправлено блоков <v4>, оценка <v5><v6></gray>",
+                    round, cl.progress(), fin, roles.size(), changed, scoreColor(v.score),
+                    schedule.assessedCurrentModel() ? "" : " · общая проверка ещё не пройдена");
             livePreview(build, model);
             tr.note("areview" + round + " state", String.join("\n", history) + "\n\nCHECKLIST\n" + cl.render(null));
-            if (round>1 && changed==0 && finished.containsValue(false)) {
+            if (context.full && changed==0 && finished.containsValue(false)) {
                 stalled=true;
                 tr.note("verification stopped","No model changes and acceptance still fails; stop retrying unchanged evidence.");
                 break;
             }
         }
         boolean allFinished = !finished.containsValue(false);
-        v.approved = allFinished && cl.allVerified() && v.score >= c.minScore;
+        v.approved = allFinished && schedule.assessedCurrentModel() && cl.allVerified() && v.score >= c.minScore;
         v.summary = summaries.isEmpty() ? null : summaries.get(summaries.size() - 1);
         v.checklist = cl.progress() + (v.approved ? " (all verified)" : stalled ? " (no progress)" : allFinished ? "" : " (round cap reached)");
-        v.finalReport = StructureAnalyzer.analyze(model, info, aopts);
-        if (v.finalReport.hasBlocking()) v.approved = false;
+        v.finishAnalysis(StructureAnalyzer.analyze(model, info, aopts));
         return v;
     }
 
@@ -757,6 +817,7 @@ public final class BuildPipeline {
         for (int round = 1; round <= rounds; round++) {
             checkCancelled(job);
             AnalysisReport rep = StructureAnalyzer.analyze(model, info, aopts);
+            VoxelModel roundSnapshot = model.copy();
             job.status("Самопроверка ИИ " + round + "/" + rounds + (parallel ? " (3 эксперта)" : "")
                     + " · проблем найдено автоматически: " + rep.issues.size(), p0 + span * (round - 1));
             String render = render(model);
@@ -788,9 +849,12 @@ public final class BuildPipeline {
                     scored++;
                 }
                 String role = parallel ? Prompts.ReviewRole.values()[k].name().toLowerCase(Locale.ROOT) : "all";
-                allApproved &= Json.bool(res, "approved", false) && sc >= c.minScore
+                boolean roleApproved = Json.bool(res, "approved", false) && sc >= c.minScore
                         && ReviewDecision.qualityFailures(res,role).isEmpty()
                         && !ReviewDecision.hasUnresolvedSerious(res,new JsonArray());
+                allApproved &= roleApproved;
+                if (roleApproved) v.blockers.remove(role);
+                else v.blockers.put(role,"review approval, quality criteria or unresolved findings did not pass");
                 String sm = Json.str(res, "summary", null);
                 if (sm != null && !sm.isBlank()) summaries.add(sm);
                 issues += Json.arr(res, "issues").size();
@@ -798,7 +862,7 @@ public final class BuildPipeline {
                 VoxelModel before = model.copy();
                 int baseBlocks = Math.max(1, before.nonAirCount());
                 OpResult r = applyWithRepair(job, tr, exec, model, res, tags.get(k));
-                if (r.opsFailed>0 || r.cellsChanged>12) allApproved=false;
+                if (r.opsFailed>0 || r.cellsChanged>0) allApproved=false;
                 boolean overBudget = cumulative + r.cellsChanged > Math.max(300, 0.5 * startBlocks);
                 if ((r.cellsChanged > 2000 && r.cellsChanged > 0.35 * baseBlocks) || overBudget) {
                     plugin.getLogger().warning("[" + tags.get(k) + "] review rewrote " + r.cellsChanged + " of " + baseBlocks
@@ -815,7 +879,10 @@ public final class BuildPipeline {
             }
             v.rounds = round;
             if (scored > 0) v.score = Math.round((float) scoreSum / scored);
-            v.approved = allApproved;
+            changed = ReviewPatch.changedCells(roundSnapshot,model);
+            v.approved = allApproved && changed == 0;
+            if (!v.approved) v.blockers.put("review:whole","final whole-build assessment of the current model is pending");
+            else v.blockers.remove("review:whole");
             if (!summaries.isEmpty()) v.summary = String.join(" ", summaries);
             v.issuesFixed += issues;
             say(job, v.approved
@@ -828,8 +895,7 @@ public final class BuildPipeline {
                     + " changed=" + changed + " blockingAfter=" + blocking);
             if (v.approved && v.score >= c.minScore && !blocking) break;
         }
-        v.finalReport = StructureAnalyzer.analyze(model, info, aopts);
-        if (v.finalReport.hasBlocking()) v.approved=false;
+        v.finishAnalysis(StructureAnalyzer.analyze(model, info, aopts));
         return v;
     }
 
@@ -1203,11 +1269,11 @@ public final class BuildPipeline {
         job.status("Размещение постройки…", 0.97);
         if (model.nonAirCount() == 0) throw new IllegalStateException("ИИ не создал ни одного блока");
         VoxelModel fin = model.copy();
-        if (v.finalReport != null && v.finalReport.hasBlocking()) v.approved=false;
+        v.finishAnalysis(v.finalReport);
         if (!v.approved) {
             writeDraft(build,fin,request,v);
             writeMetrics(job,build,fin,v,tr);
-            if (!build.versions.isEmpty()) throw new VerificationRejectedException(v.checklist+" "+v.blockers);
+            if (!build.versions.isEmpty()) throw new VerificationRejectedException(v.failureReason());
         }
         PlaceResult pr = placer.place(build, fin, p -> job.progress = 0.97 + p * 0.0003).get(10, TimeUnit.MINUTES);
         checkCancelled(job);
@@ -1243,7 +1309,7 @@ public final class BuildPipeline {
                 build.name, build.id, build.versions.get(build.currentVersion).number, fin.nonAirCount(), scoreColor(v.score),
                 v.rounds, secs, job.promptTokens.get(), job.completionTokens.get(), issuesLine, job.mode.title, job.reasoningTokens.get());
         if (v.summary != null && !v.summary.isBlank()) say(job, "<gray>ИИ: <italic><v0></italic></gray>", clip(v.summary, 220));
-        if (!v.approved) say(job,"<yellow>Не пройдено: <v0></yellow>",clip(v.blockers.isEmpty()?v.checklist:v.blockers.toString(),260));
+        if (!v.approved) say(job,"<yellow>Не пройдено: <v0></yellow>",clip(v.failureReason(),400));
         say(job, "<click:suggest_command:'/aib edit '><hover:show_text:'Изменить постройку'><aqua>[✎ Изменить]</aqua></hover></click> "
                 + "<click:run_command:'/aib undo'><hover:show_text:'Откатить к предыдущей версии'><yellow>[↶ Отменить]</yellow></hover></click> "
                 + "<click:run_command:'/aib render'><hover:show_text:'Сохранить изометрический рендер PNG'><light_purple>[🖼 Рендер]</light_purple></hover></click> "
@@ -1289,10 +1355,12 @@ public final class BuildPipeline {
         metrics.addProperty("reviewRounds", v.rounds);
         metrics.addProperty("approved", v.approved);
         metrics.addProperty("selfScore", v.score);
-        metrics.addProperty("pipelineRevision","text-quality-v1");
+        metrics.addProperty("pipelineRevision","focused-review-v2");
         metrics.addProperty("model",cfg.get().model);
         metrics.add("quality",v.quality.deepCopy());
         metrics.add("blockers",Json.GSON.toJsonTree(v.blockers));
+        metrics.add("reviewContexts",v.reviewContexts.deepCopy());
+        if (rep != null) metrics.add("analyzerIssues",Json.GSON.toJsonTree(rep.issues));
         if (rep != null) {
             metrics.addProperty("critical", rep.count(dev.aibuild.analysis.Severity.CRITICAL));
             metrics.addProperty("major", rep.count(dev.aibuild.analysis.Severity.MAJOR));
@@ -1588,14 +1656,7 @@ public final class BuildPipeline {
     }
 
     private static AnalyzerOptions analyzerOptions(JsonObject plan) {
-        AnalyzerOptions o = new AnalyzerOptions();
-        o.expectInterior = Json.bool(plan, "expect_interior", true);
-        JsonObject body = Json.obj(plan, "body");
-        if (body != null && body.has("x") && body.has("z")) {
-            o.expectedFootprint = new int[]{Json.integer(body, "x", 0), Json.integer(body, "z", 0)};
-            if (o.expectedFootprint[0] <= 0 || o.expectedFootprint[1] <= 0) o.expectedFootprint = null;
-        }
-        return o;
+        return BuildRequirements.analyzerOptions(plan);
     }
 
     /** The brief as sent to the model (stages omitted for brevity after planning? keep all — they carry intent). */

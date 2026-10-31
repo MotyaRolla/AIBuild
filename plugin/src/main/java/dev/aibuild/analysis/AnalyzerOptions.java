@@ -24,6 +24,10 @@ public class AnalyzerOptions {
      */
     public int[] expectedFootprint = null;
 
+    /** Inclusive overall solid dimensions {x,y,z}; zero leaves an axis unconstrained. */
+    public int[] maximumSize = null;
+    public int[] exactSize = null;
+
     /** Default options: interior expected, no footprint check. */
     public AnalyzerOptions() {
     }
@@ -65,6 +69,8 @@ public class AnalyzerOptions {
     public AnalyzerOptions copy() {
         AnalyzerOptions o = new AnalyzerOptions(expectInterior);
         o.expectedFootprint = expectedFootprint == null ? null : expectedFootprint.clone();
+        o.maximumSize = maximumSize == null ? null : maximumSize.clone();
+        o.exactSize = exactSize == null ? null : exactSize.clone();
         return o;
     }
 
@@ -76,7 +82,9 @@ public class AnalyzerOptions {
     @Override
     public String toString() {
         String fp = expectedFootprint == null ? "null" : expectedFootprint[0] + "x" + expectedFootprint[1];
-        return "AnalyzerOptions{expectInterior=" + expectInterior + ", expectedFootprint=" + fp + "}";
+        return "AnalyzerOptions{expectInterior=" + expectInterior + ", expectedFootprint=" + fp
+                + ", maximumSize=" + java.util.Arrays.toString(maximumSize)
+                + ", exactSize=" + java.util.Arrays.toString(exactSize) + "}";
     }
 
     @Override
@@ -84,11 +92,14 @@ public class AnalyzerOptions {
         if (this == o) return true;
         if (!(o instanceof AnalyzerOptions other)) return false;
         return expectInterior == other.expectInterior
-                && java.util.Arrays.equals(expectedFootprint, other.expectedFootprint);
+                && java.util.Arrays.equals(expectedFootprint, other.expectedFootprint)
+                && java.util.Arrays.equals(maximumSize, other.maximumSize)
+                && java.util.Arrays.equals(exactSize, other.exactSize);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(expectInterior, java.util.Arrays.hashCode(expectedFootprint));
+        return Objects.hash(expectInterior, java.util.Arrays.hashCode(expectedFootprint),
+                java.util.Arrays.hashCode(maximumSize), java.util.Arrays.hashCode(exactSize));
     }
 }

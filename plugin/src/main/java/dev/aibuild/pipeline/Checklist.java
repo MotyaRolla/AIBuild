@@ -47,11 +47,14 @@ public final class Checklist {
     /** Checklist for a new build: fixed core + brief details, rooms and exterior. */
     public static Checklist forCreate(JsonObject plan) {
         Checklist c = new Checklist();
-        c.add("Request compliance: building type, style, EXACT main-body size, every requested feature present", "structure");
-        c.add("Shell closed: walls and roofs without holes, nothing floating, foundations reach the ground", "structure");
+        boolean building = BuildRequirements.isBuilding(plan);
+        c.add("Request compliance: object type, style, requested exact sizes or maximum limits, every requested feature present", "structure");
+        c.add(building ? "Shell closed: walls and roofs without holes, nothing floating, foundations reach the ground"
+                : "Object structure: requested parts connected and supported; do not require walls, a roof or an interior", "structure");
         c.add("Stairs and slabs: facing/half correct (roofs uphill, skirts/sills/eaves back to the wall, chairs to the table), every one supported", "structure");
         c.add("Doors, trapdoors, torches, lanterns, ladders, chains, beds, logs: facing correct, each attached to a solid support, passages free", "structure");
-        c.add("Composition: intentional massing and proportions, legible entrance, coherent window rhythm; facade depth and palette fit the requested style, without arbitrary material or decoration quotas", "exterior");
+        c.add(building ? "Composition: intentional massing and proportions, legible entrance, coherent window rhythm; facade depth and palette fit the requested style, without arbitrary material or decoration quotas"
+                : "Composition: recognizable silhouette, balanced proportions and coherent parts; materials fit the object; do not invent entrances or windows", "exterior");
         c.add("Roof/form: silhouette and roof-to-body proportions fit the design; required roofs closed, junctions clean; flat roofs and restrained detailing are valid when appropriate", "exterior");
         c.add("Site: build meets the ground convincingly, entrance connects to surroundings; landscape and props serve the brief rather than clutter it", "exterior");
         c.add("Function: required interior spaces furnished for their purpose; non-building objects instead have complete recognizable requested parts; do not invent rooms", "interior");
@@ -152,6 +155,21 @@ public final class Checklist {
             if (!ok) failed++;
         }
         return failed;
+    }
+
+    /** A final full assessment must supply fresh passing results for every owned item. */
+    public synchronized boolean coveredBy(JsonArray checked, String area) {
+        java.util.Set<String> covered = new java.util.HashSet<>();
+        for (JsonElement element : checked) {
+            if (!element.isJsonObject()) continue;
+            JsonObject item = element.getAsJsonObject();
+            String id = Json.str(item, "id", "").trim().toUpperCase(Locale.ROOT);
+            if (!id.startsWith("C")) id = "C" + id;
+            if (Json.bool(item, "ok", false)) covered.add(id);
+            else covered.remove(id);
+        }
+        for (Item item : items.values()) if (owns(item, area) && !covered.contains(item.id)) return false;
+        return true;
     }
 
     /** Text for the prompt, optionally filtered to an area (always includes "any"). */

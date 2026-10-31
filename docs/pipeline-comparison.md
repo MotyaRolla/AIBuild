@@ -1,7 +1,8 @@
 # GitHub baseline and local AIBuild changes
 
 Comparison against local GitHub checkout `5e082d7` and installed local release 1.1.0.
-These changes are local; they have not been committed or pushed to GitHub.
+The 1.1.0 changes were committed locally as `2bff405`. Subsequent 1.2.0 validation
+and review changes are described separately in [focused-review.md](focused-review.md).
 
 | Area | GitHub baseline | Installed local version |
 |---|---|---|

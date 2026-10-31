@@ -196,6 +196,7 @@ public final class Prompts {
                   "type":"house|tower|castle|shop|bridge|statue|tree|ship|other",
                   "body":{"x":9,"z":9,"floors":1,"wall_top_y":4},
                   "plot":{"min":[x,y,z],"max":[x,y,z]}, "expect_interior":true,
+                  "size_limits":{"x":0,"y":0,"z":0}, "exact_size":{"x":0,"y":0,"z":0},
                   "palette":{"foundation":"...","frame":"...","infill":"...","roof":"..."},
                   "design":{"massing":"primary and subordinate forms, with approximate proportions",
                     "rhythm":"opening/structural repetition or deliberate restraint",
@@ -206,8 +207,14 @@ public final class Prompts {
                     "rooms":[{"name":"...","area":"x1-x2,z1-z2","furnishing":"..."}]}],
                   "exterior":"...", "details":["distinctive features worth verifying, no duplicate prose"]
                 }, "ops":[...all construction operations, in dependency order...]}
-                plot must enclose ALL roofs, garden, paths, chimney and foundations. Keep notes brief. Include
-                the finished interior and exterior now; the reviewers correct defects rather than finish it.
+                plot must enclose ALL roofs, garden, paths, chimney and foundations. Keep notes brief.
+                size_limits ONLY for user-specified maximum overall dimensions; exact_size ONLY for explicitly
+                exact overall dimensions (zero means unconstrained). Dimensions are block counts, inclusive,
+                in x/y/z order. A maximum 48x48 footprint and height 36 means size_limits x=48,y=36,z=48,
+                not an exact 48x48 wall footprint. body.x/z describes exact main walls ONLY for buildings.
+                Set type accurately and expect_interior=false for solid sculptures, bridges and terrain unless
+                a usable interior was requested. Do not invent rooms, doors or roofs for those objects.
+                Include the finished interior and exterior now; reviewers correct defects rather than finish it.
                 Each operation must do new work. Never repeat identical ops or oscillate between materials.
                 Prefer a compact complete program (usually 20-60 ops for a small house) over block enumeration.
                 """.formatted(escape(request));
@@ -230,6 +237,7 @@ public final class Prompts {
                  "body": {"x": 10, "z": 10, "floors": 2, "wall_top_y": 9},
                  "plot": {"min": [x,y,z], "max": [x,y,z]},
                  "expect_interior": true,
+                 "size_limits": {"x":0,"y":0,"z":0}, "exact_size": {"x":0,"y":0,"z":0},
                  "palette": {"foundation": "...", "frame": "...", "infill": "...", "roof": "...", "floor": "...", "trim": "...", "accent": "..."},
                  "layout": [{"level": "ground floor", "y": 1, "height": 4, "rooms": [{"name": "...", "area": "x1-x2, z1-z2", "furnishing": "..."}]}],
                  "exterior": "what goes around the body",
@@ -237,7 +245,12 @@ public final class Prompts {
                  "stages": [{"name": "...", "goal": "precise description incl. coordinates, blocks and orientations", "parallel": false}]
                 }
                 plot = full bounding box incl. roof overhang, chimney and yard decorations (y from the lowest
-                foundation/footing to the top of the roof/chimney). Plan 4-6 stages bottom-up, e.g.: 1) foundation,
+                footing to the highest point). size_limits records only USER-specified maximum overall x/y/z
+                dimensions; exact_size records only USER-specified exact overall dimensions. Zero is unconstrained.
+                Maximum dimensions must not become exact wall dimensions. body.x/z is a wall footprint only
+                for buildings. Set type accurately; solid sculptures/bridges/terrain normally expect_interior=false.
+                Do not invent habitable rooms, doors or roofs for objects that do not require them.
+                Plan 4-6 stages bottom-up, e.g.: 1) foundation,
                 plinth & floors; 2) walls, timber frame, windows, doors & facade details; 3) roof, eaves, gables,
                 chimney, dormers; 4) ground floor interior; 5) upper floor / attic interior; 6) exterior landscaping.
                 Do NOT plan a separate "final check/detailing" stage: three expert reviewers verify and polish the
@@ -552,6 +565,27 @@ public final class Prompts {
 
     public static final String EDIT_REVIEWER_TITLE = "CHANGE REVIEWER";
 
+    public static String reviewScope(boolean full) {
+        return full ? """
+
+                REVIEW SCOPE: FULL WHOLE-BUILD ASSESSMENT
+                Inspect every checklist item you own, including previously OK items, against the current model.
+                Check interactions between repaired and unchanged parts. Assess every quality criterion from the
+                supplied full model. This is the assessment required before final approval. Repair real defects only.
+                """ : """
+
+                REVIEW SCOPE: FOCUSED REPAIR RECHECK
+                Inspect OPEN/RECHECK items, the supplied repair regions and their connections to surrounding parts.
+                Previously OK items remain provisional: only report them again if affected by these repairs.
+                Do not re-describe the whole build or repeat unchanged checklist evidence. Keep notes and quality
+                evidence concise and specific. Global views describe silhouette; they do not expose hidden cells.
+                Only propose ops inside the supplied exact regions. If required evidence is missing, set
+                "needs_full_review":true, explain what must be inspected, and do not guess or repair unseen cells.
+                You may report done when your focused work is complete; code will still schedule a FULL assessment
+                before approval. For each issue include "region":{"from":[x,y,z],"to":[x,y,z]} when known.
+                """;
+    }
+
     public static String qualityReview(String role) {
         return """
 
@@ -576,7 +610,8 @@ public final class Prompts {
                 usability=required routes, headroom, furnishings and functional parts (for a sculpture: recognizable
                 complete parts and appropriate site access, not an invented interior).
 
-                Include every applicable checklist item, with a short observed evidence note. Include a "check"
+                Follow the supplied review scope: full assessment covers every applicable item; focused rechecks
+                cover pending and affected items without claiming to inspect unseen parts. Include a "check"
                 checklist ID on each issue. Any unresolved critical/major issue blocks acceptance regardless of score.
                 If you fix a serious issue, either recheck next round or supply sufficient passing block-state proofs
                 on that SAME failed checklist item; a proof for an unrelated item cannot approve it.

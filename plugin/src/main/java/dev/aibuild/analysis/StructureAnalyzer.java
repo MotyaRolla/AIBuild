@@ -184,6 +184,7 @@ public final class StructureAnalyzer {
             checkRoofOverhang();
             finishDetailMetrics();
             checkFootprint();
+            checkOverallSize();
             finishMetrics();
             return buildReport();
         }
@@ -612,6 +613,7 @@ public final class StructureAnalyzer {
          * open builds (bridges, ruins) from producing false positives.
          */
         private void checkSkyExposure() {
+            if (!opts.expectInterior) return;
             int[] fp = wallFootprint();
             if (fp == null) return;
             // Only a real wall ring can have a roof hole. Corner pillars or a couple of scattered blocks must not
@@ -912,7 +914,7 @@ public final class StructureAnalyzer {
             metrics.put("avgInteriorLight", avg);
             metrics.put("minInteriorLight", walkable == 0 ? 0 : min);
             metrics.put("darkSpots", dark);
-            if (dark > 0) {
+            if (dark > 0 && opts.expectInterior) {
                 issues.add(Issue.of(Severity.MAJOR, "dark_interior",
                         dark + " of " + walkable + " walkable interior cells have block light 0"
                                 + " (hostile mobs can spawn); add torches/lanterns", darkSamples));
@@ -1100,7 +1102,7 @@ public final class StructureAnalyzer {
                 }
             }
             metrics.put("verticalAccess", access);
-            if (!access) {
+            if (!access && opts.expectInterior) {
                 issues.add(Issue.of(Severity.MAJOR, "no_vertical_access",
                         "the interior is " + (spans + 1) + " blocks tall (walkable y" + lo + ".." + hi
                                 + ") but there is no ladder, scaffolding, vines or stairs to change level"));
@@ -1357,6 +1359,24 @@ public final class StructureAnalyzer {
                 issues.add(Issue.of(Severity.MAJOR, "footprint_mismatch",
                         "expected footprint " + ex + "x" + ez + " (x by z) but the main body walls measure "
                                 + ax + "x" + az + " at x" + fp[0] + ".." + fp[1] + " z" + fp[2] + ".." + fp[3]));
+            }
+        }
+
+        private void checkOverallSize() {
+            int[] actual = {nonAirBounds[3] - nonAirBounds[0] + 1,
+                    nonAirBounds[4] - nonAirBounds[1] + 1, nonAirBounds[5] - nonAirBounds[2] + 1};
+            String[] axes = {"x", "y", "z"};
+            for (int i = 0; i < 3; i++) {
+                if (opts.maximumSize != null && opts.maximumSize.length > i && opts.maximumSize[i] > 0
+                        && actual[i] > opts.maximumSize[i]) {
+                    issues.add(Issue.of(Severity.MAJOR, "size_limit_exceeded",
+                            "overall solid " + axes[i] + " size " + actual[i] + " exceeds maximum " + opts.maximumSize[i]));
+                }
+                if (opts.exactSize != null && opts.exactSize.length > i && opts.exactSize[i] > 0
+                        && actual[i] != opts.exactSize[i]) {
+                    issues.add(Issue.of(Severity.MAJOR, "overall_size_mismatch",
+                            "overall solid " + axes[i] + " size " + actual[i] + " must equal " + opts.exactSize[i]));
+                }
             }
         }
 

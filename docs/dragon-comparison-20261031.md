@@ -1,5 +1,8 @@
 # Dragon comparison: Original, Three.js, Our
 
+This is the preserved 1.1.0 comparison. The subsequent 1.2.0 fixes and offline replay
+are recorded separately in [focused-review.md](focused-review.md).
+
 Completed on 31 October 2026. All three saved models are in the main server's
 world, registered for `/aib tp`, and checked against saved world blocks. The main
 server is running Our 1.1.0 and its original configuration again. Both workers and

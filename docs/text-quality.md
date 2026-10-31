@@ -1,5 +1,8 @@
 # Text-only build quality
 
+This document records the 1.1.0 revision. The subsequent object-validation and focused-review
+changes, including current verification results, are documented in [focused-review.md](focused-review.md).
+
 The first quality revision keeps `deepseek/deepseek-v4.1-flash`, the compiled operation DSL,
 standard as the default mode, and the existing standard/extra reasoning settings. It needs only
 the existing Java runtime and Paper API. There is no image input, new model, Node process,
