@@ -1,0 +1,16 @@
+{
+  "name": "aibuild-three",
+  "private": true,
+  "type": "module",
+  "version": "0.1.0",
+  "description": "AIBuild 3D: build highly detailed structures in three.js first, then transfer them into Minecraft",
+  "workspaces": ["packages/*"],
+  "scripts": {
+    "studio": "node packages/studio/src/server.mjs",
+    "test": "node --test packages/*/test/*.test.mjs",
+    "smoke": "node packages/core/src/cli.mjs"
+  },
+  "dependencies": {
+    "three": "^0.187.0"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@aibuild/transfer",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.mjs",
+  "description": "Voxelise an AIBuild StructureSpec and export it as Minecraft blocks, .litematic schematics and /setblock commands"
+}

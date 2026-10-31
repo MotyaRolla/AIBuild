@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AIBuild 3D — Studio</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23222a33'/%3E%3Cpath d='M16 6l9 5v10l-9 5-9-5V11z' fill='none' stroke='%23e8c07a' stroke-width='2'/%3E%3Cpath d='M16 16l9-5M16 16v10M16 16L7 11' stroke='%23e8c07a' stroke-width='1.5' fill='none'/%3E%3C/svg%3E" />
+<link rel="stylesheet" href="/style.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "/vendor/three.module.js",
+    "three/addons/": "/vendor/addons/"
+  }
+}
+</script>
+</head>
+<body>
+<div id="app" class="app" data-mode="single">
+  <!-- ───────────────────────── sidebar: builds ───────────────────────── -->
+  <aside class="sidebar" id="sidebar">
+    <header class="brand">
+      <div class="brand-mark" aria-hidden="true"></div>
+      <div class="brand-text">
+        <h1>AIBuild <span>3D</span></h1>
+        <p>studio</p>
+      </div>
+      <button class="icon-btn sidebar-collapse" id="sidebar-toggle" title="Hide panel" aria-label="Hide panel">‹</button>
+    </header>
+
+    <section class="compose">
+      <label class="field-label" for="prompt">New building</label>
+      <textarea id="prompt" rows="3" placeholder="e.g. a two-storey medieval house with a gable roof, timber framing and a garden path"></textarea>
+      <div class="compose-row">
+        <button class="btn primary" id="create-btn">Design</button>
+        <select id="sample-select" title="Start from a prepared sample spec">
+          <option value="">sample…</option>
+        </select>
+      </div>
+      <p class="hint" id="create-hint">Queued builds appear instantly; generation is wired later.</p>
+    </section>
+
+    <section class="builds">
+      <div class="section-head">
+        <h2>Builds</h2>
+        <div class="section-actions">
+          <span class="count" id="build-count">0</span>
+          <button class="icon-btn" id="refresh-btn" title="Refresh builds" aria-label="Refresh builds">⟳</button>
+        </div>
+      </div>
+      <div class="build-list" id="build-list" role="listbox" aria-label="Builds"></div>
+      <p class="empty" id="build-empty">No builds yet. Design one above, or run the pipeline (<code>node packages/core/src/cli.mjs build "…"</code>).</p>
+    </section>
+  </aside>
+
+  <!-- ───────────────────────── main column ───────────────────────── -->
+  <main class="main">
+    <header class="topbar">
+      <div class="crumbs">
+        <span class="crumb-root">out/</span>
+        <span id="build-name" class="crumb-current">no build selected</span>
+      </div>
+      <div class="toolbar">
+        <div class="segmented" role="tablist" aria-label="View mode">
+          <button class="seg active" data-mode="single" role="tab" aria-selected="true">Single</button>
+          <button class="seg" data-mode="compare" role="tab" aria-selected="false">Compare</button>
+        </div>
+        <div class="segmented views" id="view-switch" role="tablist" aria-label="Camera"></div>
+        <button class="btn ghost" id="wire-btn" aria-pressed="false">Edges</button>
+        <button class="btn ghost" id="reset-btn">Reset view</button>
+        <select id="version-select" title="Spec version shown in the viewer" aria-label="Spec version"></select>
+        <a class="btn ghost" id="download-litematic" href="#" download hidden>Litematic</a>
+      </div>
+    </header>
+
+    <div class="stage" id="stage">
+      <div class="panes">
+        <section class="pane active" id="pane-a" data-pane="a">
+          <div class="pane-head" hidden>
+            <select class="pane-version" id="version-a" aria-label="Left pane spec version"></select>
+          </div>
+          <canvas class="viewer" id="view-a"></canvas>
+          <div class="viewer-hud" id="hud-a"></div>
+          <div class="viewer-error" id="err-a" hidden></div>
+        </section>
+        <section class="pane" id="pane-b" data-pane="b">
+          <div class="pane-head">
+            <select class="pane-version" id="version-b" aria-label="Right pane spec version"></select>
+          </div>
+          <canvas class="viewer" id="view-b"></canvas>
+          <div class="viewer-hud" id="hud-b"></div>
+          <div class="viewer-error" id="err-b" hidden></div>
+        </section>
+      </div>
+
+      <aside class="inspector" id="inspector">
+        <nav class="tabs" role="tablist">
+          <button class="tab active" data-tab="iterations" role="tab" aria-selected="true">Iterations</button>
+          <button class="tab" data-tab="renders" role="tab" aria-selected="false">Renders</button>
+          <button class="tab" data-tab="spec" role="tab" aria-selected="false">Spec</button>
+        </nav>
+
+        <div class="tab-panel active" data-panel="iterations">
+          <div id="iterations-list" class="iterations"></div>
+        </div>
+
+        <div class="tab-panel" data-panel="renders">
+          <div class="renders-toolbar">
+            <select id="render-iteration" aria-label="Iteration filter"></select>
+          </div>
+          <div id="renders-grid" class="renders-grid"></div>
+          <div id="lightbox" class="lightbox" hidden>
+            <button class="lightbox-close" id="lightbox-close" aria-label="Close">×</button>
+            <img id="lightbox-img" alt="render" />
+            <p id="lightbox-caption"></p>
+          </div>
+        </div>
+
+        <div class="tab-panel" data-panel="spec">
+          <div class="spec-meta" id="spec-meta"></div>
+          <pre class="spec-json" id="spec-json">—</pre>
+        </div>
+      </aside>
+    </div>
+
+    <footer class="statusbar">
+      <span id="status-text">ready</span>
+      <span class="spacer"></span>
+      <span id="stat-tris">—</span>
+      <span id="stat-objects">—</span>
+      <span id="stat-size">—</span>
+      <button class="link-btn" id="stat-server" title="Server health">server</button>
+    </footer>
+  </main>
+</div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>

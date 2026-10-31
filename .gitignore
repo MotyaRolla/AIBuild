@@ -22,3 +22,8 @@ bench/
 AIBuild.jar
 plugin/cp.txt
 .audit/
+
+# three.js experiment
+three/node_modules/
+three/out/
+.npm-cache/
