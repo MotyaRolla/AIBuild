@@ -34,6 +34,8 @@ public final class BuildVersion {
     public int score;
     /** Thinking mode id that produced this version (fast/light/standard/extra), or null (import/manual). */
     public String mode;
+    /** null for legacy/manual versions, false for a generated draft, true for an approved generation. */
+    public Boolean approved;
 
     /** Creates an empty version (number 0, empty model). Primarily for deserialization. */
     public BuildVersion() {
@@ -70,6 +72,7 @@ public final class BuildVersion {
         BuildVersion c = new BuildVersion(number, request, summary, model == null ? new VoxelModel() : model.copy(),
                 createdAt, score);
         c.mode = mode;
+        c.approved = approved;
         return c;
     }
 
@@ -80,6 +83,7 @@ public final class BuildVersion {
     public String display() {
         StringBuilder sb = new StringBuilder("#").append(number);
         if (score > 0) sb.append(" (score ").append(score).append(')');
+        if (Boolean.FALSE.equals(approved)) sb.append(" [draft]");
         String s = summary;
         if (s == null || s.isBlank()) s = request;
         if (s != null && !s.isBlank()) {
@@ -101,6 +105,7 @@ public final class BuildVersion {
         o.addProperty("createdAt", createdAt);
         o.addProperty("score", score);
         if (mode != null) o.addProperty("mode", mode);
+        if (approved != null) o.addProperty("approved", approved);
         o.add("model", (model == null ? new VoxelModel() : model).toJson());
         return o;
     }
@@ -120,6 +125,7 @@ public final class BuildVersion {
         v.createdAt = optLong(o, "createdAt", 0L);
         v.score = clampInt(optInt(o, "score", 0), 0, 100);
         v.mode = optString(o, "mode");
+        if (o.has("approved") && !o.get("approved").isJsonNull()) v.approved = optBoolean(o,"approved",false);
         JsonObject m = null;
         try {
             if (o.has("model") && o.get("model").isJsonObject()) m = o.getAsJsonObject("model");

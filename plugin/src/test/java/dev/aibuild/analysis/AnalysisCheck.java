@@ -38,7 +38,7 @@ public final class AnalysisCheck {
 
     public static void main(String[] args) throws Exception {
         BlockInfo info = new StubBlockInfo();
-        File outDir = new File("/root/ai-build/.build/agentC");
+        File outDir = java.nio.file.Files.createTempDirectory("aibuild-analysis-").toFile();
         //noinspection ResultOfMethodCallIgnored
         outDir.mkdirs();
 

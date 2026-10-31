@@ -31,6 +31,7 @@ public final class OpResult {
     public final List<String> warnings = new ArrayList<>();
     /** Informational lines for the model description (e.g. {@code roof: style=gable top_y=12}). */
     public final List<String> info = new ArrayList<>();
+    public final List<Doorway> doorways = new ArrayList<>();
 
     private static final int MAX_ERROR_LINES = 40;
     private static final int MAX_WARNING_LINES = 20;
@@ -96,6 +97,7 @@ public final class OpResult {
         errors.addAll(other.errors);
         warnings.addAll(other.warnings);
         info.addAll(other.info);
+        doorways.addAll(other.doorways);
         return this;
     }
 

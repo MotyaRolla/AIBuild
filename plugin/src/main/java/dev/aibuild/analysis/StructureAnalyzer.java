@@ -1235,13 +1235,13 @@ public final class StructureAnalyzer {
             if (visible > FACADE_MIN_CELLS && share > MONOTONY_SHARE) {
                 issues.add(Issue.of(Severity.MINOR, "monotonous_facade_" + side,
                         Math.round(share * 100) + "% of the " + side + " facade is " + dominant
-                                + "; add framing/texture/depth (base course, corner posts, windows, a different"
-                                + " accent material)"));
+                                + "; descriptive palette concentration, not automatically a design defect."
+                                + " Check coherence and intent before changing materials"));
             }
             if (visible > FACADE_MIN_CELLS && relief < 0.5) {
                 issues.add(Issue.of(Severity.MINOR, "flat_facade_" + side,
                         "the " + side + " facade is flat (" + visible + " visible blocks, average recess "
-                                + fmtDouble(relief) + " blocks); recess windows, add pillars or an overhang"));
+                                + fmtDouble(relief) + " blocks); assess against the requested style; intentional plain surfaces can be valid"));
             }
         }
 

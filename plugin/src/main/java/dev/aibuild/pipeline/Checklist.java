@@ -51,12 +51,12 @@ public final class Checklist {
         c.add("Shell closed: walls and roofs without holes, nothing floating, foundations reach the ground", "structure");
         c.add("Stairs and slabs: facing/half correct (roofs uphill, skirts/sills/eaves back to the wall, chairs to the table), every one supported", "structure");
         c.add("Doors, trapdoors, torches, lanterns, ladders, chains, beds, logs: facing correct, each attached to a solid support, passages free", "structure");
-        c.add("Facades: depth layers, framing, window frames/sills/shutters, material variety, no flat monotone areas", "exterior");
-        c.add("Roofs: slope, overhang, eaves, ridges, gables, chimneys, closed and textured", "exterior");
-        c.add("Surroundings: paths, garden/yard, decorations, entrance", "exterior");
-        c.add("Interiors: every room furnished for its function, believable furniture", "interior");
-        c.add("Lighting: no dark walkable interior cell", "interior");
-        c.add("Access: doors free on both sides, stairs/ladders with headroom to every floor", "interior");
+        c.add("Composition: intentional massing and proportions, legible entrance, coherent window rhythm; facade depth and palette fit the requested style, without arbitrary material or decoration quotas", "exterior");
+        c.add("Roof/form: silhouette and roof-to-body proportions fit the design; required roofs closed, junctions clean; flat roofs and restrained detailing are valid when appropriate", "exterior");
+        c.add("Site: build meets the ground convincingly, entrance connects to surroundings; landscape and props serve the brief rather than clutter it", "exterior");
+        c.add("Function: required interior spaces furnished for their purpose; non-building objects instead have complete recognizable requested parts; do not invent rooms", "interior");
+        c.add("Lighting: required usable interior spaces lit, without adding unnecessary fixtures to non-interior objects", "interior");
+        c.add("Access: required doors, furniture and floors reachable with free approach cells and headroom; preserve deliberate solid sculptures and inaccessible decorative forms", "interior");
         if (plan != null) {
             for (JsonElement l : Json.arr(plan, "layout")) {
                 if (!l.isJsonObject()) continue;
@@ -112,6 +112,11 @@ public final class Checklist {
         return true;
     }
 
+    public synchronized boolean allVerified(String area) {
+        for (Item i : items.values()) if (owns(i, area) && i.status != Status.OK) return false;
+        return true;
+    }
+
     /** Areas that still have OPEN/RECHECK items ("any" counts as structure). */
     public synchronized List<String> openAreas() {
         List<String> out = new ArrayList<>();
@@ -125,6 +130,10 @@ public final class Checklist {
 
     /** Applies reviewer results: [{"id":"C3","ok":true,"note":"..."}]. Returns number of failed (ok=false) items. */
     public synchronized int apply(JsonArray checked, int round) {
+        return apply(checked, round, null);
+    }
+
+    public synchronized int apply(JsonArray checked, int round, String area) {
         int failed = 0;
         for (JsonElement e : checked) {
             if (!e.isJsonObject()) continue;
@@ -133,6 +142,7 @@ public final class Checklist {
             if (!id.startsWith("C")) id = "C" + id;
             Item it = items.get(id);
             if (it == null) continue;
+            if (!owns(it, area)) continue;
             boolean ok = Json.bool(o, "ok", false);
             it.status = ok ? Status.OK : Status.RECHECK;
             if (!ok) it.fails++;
@@ -148,12 +158,17 @@ public final class Checklist {
     public synchronized String render(String area) {
         StringBuilder sb = new StringBuilder();
         for (Item i : items.values()) {
-            if (area != null && !area.equals(i.area) && !i.area.equals("any") && !"change".equals(area)) continue;
+            if (!owns(i, area)) continue;
             sb.append(i.id).append(" [").append(i.area).append("] ").append(i.status).append(": ").append(i.text);
             if (!i.note.isBlank()) sb.append(" — last note (round ").append(i.round).append("): ").append(i.note);
             sb.append('\n');
         }
         return sb.toString();
+    }
+
+    private static boolean owns(Item item, String area) {
+        if (area == null || area.equals("all") || area.equals("change")) return true;
+        return item.area.equals(area) || item.area.equals("any") && area.equals("structure");
     }
 
     public synchronized String progress() {

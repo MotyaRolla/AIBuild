@@ -11,6 +11,7 @@ secrets/
 .scratch/
 plugin/target/
 *.class
+__pycache__/
 
 # local server / panel helpers output
 logs/

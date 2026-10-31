@@ -17,6 +17,9 @@ api:
 generation:
   # Thinking mode used when a player has not chosen one with /aib mode (fast | light | standard | extra)
   default-mode: standard
+  # Write one complete architectural program, retaining the mode's construction thinking.
+  # staged restores the original plan -> individual construction calls for comparisons.
+  create-strategy: compiled
   auto-orient: true          # auto-correct stair facing / slab type from context (roof slopes, wall-backed, chairs)
   # Self-verification: "adaptive" = reviewers work through a checklist and decide themselves when everything is
   # verified (stops early, continues while fixes need re-checking, capped by adaptive-max-rounds);
@@ -69,18 +72,19 @@ modes:
     max-tokens: 60000
   standard:
     title: "Стандарт"
-    eta: "~14–18 мин"
+    eta: "время зависит от сложности"
     plan: "off"
     build: low
     review: low
-    review-followup: "off"
+    review-followup: low
     edit: low
     verify-rounds: 3
     edit-verify-rounds: 1
     max-tokens: 60000
+    parallel-review: false
   extra:
     title: "Экстра-думание"
-    eta: "~35–60 мин"
+    eta: "время зависит от сложности"
     plan: low
     build: high
     review: high

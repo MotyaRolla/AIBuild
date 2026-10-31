@@ -17,6 +17,7 @@ public final class Job {
     public final AtomicBoolean cancelled;
     /** Number of LLM calls made by this job. */
     public final java.util.concurrent.atomic.AtomicInteger calls = new java.util.concurrent.atomic.AtomicInteger();
+    public final java.util.concurrent.atomic.AtomicInteger callsWithoutUsage = new java.util.concurrent.atomic.AtomicInteger();
     /** Quiet jobs (benchmarks) do not send chat progress messages. */
     public volatile boolean quiet;
     public final AtomicLong promptTokens = new AtomicLong();
@@ -36,6 +37,7 @@ public final class Job {
     public volatile int[] plotLimits;
     /** Recent automatic orientation corrections (guarded by this). */
     public final java.util.List<String> autoNotes = new java.util.ArrayList<>();
+    public final java.util.List<dev.aibuild.model.ops.Doorway> doorways = new java.util.ArrayList<>();
 
     public Job(String buildId, UUID owner, Kind kind, String request, dev.aibuild.config.BuildMode mode) {
         this(buildId, owner, kind, request, mode, new AtomicBoolean());

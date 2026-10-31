@@ -62,6 +62,8 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
     private final Map<String, String> playerModes = new ConcurrentHashMap<>();
     private final Map<UUID, Location[]> selections = new ConcurrentHashMap<>();
     private final Map<String, BossBar> bars = new HashMap<>();
+    private final Map<String, Long> progressMessageAt = new HashMap<>();
+    private final Map<String, String> progressMessageStatus = new HashMap<>();
 
     @Override
     public void onEnable() {
@@ -271,6 +273,8 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
     private void updateBars() {
         Map<String, Job> live = new HashMap<>();
         for (Job j : pipeline.jobs()) if (!j.finished) live.put(j.buildId, j);
+        progressMessageAt.keySet().retainAll(live.keySet());
+        progressMessageStatus.keySet().retainAll(live.keySet());
         // remove finished
         bars.entrySet().removeIf(en -> {
             if (live.containsKey(en.getKey())) return false;
@@ -278,18 +282,36 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
             return true;
         });
         for (Job j : live.values()) {
-            String chars = j.streamChars + j.reasoningChars > 0
-                    ? "  ·  ИИ пишет: " + (j.streamChars / 1000) + "k" + (j.reasoningChars > 0 ? " (+" + (j.reasoningChars / 1000) + "k мыслей)" : "") : "";
+            String activity = j.streamChars > 0 ? "writing" : j.reasoningChars > 0 ? "thinking" : "working";
+            String status = j.status.length()>48 ? j.status.substring(0,47)+"…" : j.status;
             Component title = Component.text("AIBuild [" + j.buildId + "] ", NamedTextColor.AQUA)
-                    .append(Component.text("«" + j.mode.title + "» ", NamedTextColor.LIGHT_PURPLE))
-                    .append(Component.text(j.status + chars, NamedTextColor.WHITE))
+                    .append(Component.text(j.mode.id + " · ", NamedTextColor.LIGHT_PURPLE))
+                    .append(Component.text(status + " · " + activity, NamedTextColor.WHITE))
                     .append(Component.text("  " + j.elapsedSeconds() + "s", NamedTextColor.GRAY));
             BossBar bar = bars.computeIfAbsent(j.buildId, k -> BossBar.bossBar(title, 0f, BossBar.Color.BLUE, BossBar.Overlay.PROGRESS));
             bar.name(title);
             bar.progress((float) Math.max(0, Math.min(1, j.progress)));
+            long now = System.currentTimeMillis();
+            long last = progressMessageAt.getOrDefault(j.buildId,0L);
+            boolean changed = !j.status.equals(progressMessageStatus.get(j.buildId));
+            if (!j.quiet && (last == 0 || now-last >= 30_000 || changed && now-last >= 5_000)) {
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    if (j.owner != null ? j.owner.equals(p.getUniqueId()) : p.isOp() || p.hasPermission("aibuild.admin")) {
+                        Msg.send(p,"<gray>[<v0>] <white><v1></white> · <v2>s · DeepSeek: <v3></gray>",
+                                j.buildId,j.status,j.elapsedSeconds(),activity);
+                    }
+                }
+                progressMessageAt.put(j.buildId,now);
+                progressMessageStatus.put(j.buildId,j.status);
+            }
             if (j.owner != null) {
                 Player p = Bukkit.getPlayer(j.owner);
                 if (p != null) p.showBossBar(bar);
+            } else {
+                for (Player p : Bukkit.getOnlinePlayers()) {
+                    if (p.isOp() || p.hasPermission("aibuild.admin")) p.showBossBar(bar);
+                    else p.hideBossBar(bar);
+                }
             }
         }
     }

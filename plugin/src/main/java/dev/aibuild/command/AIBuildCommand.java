@@ -181,9 +181,18 @@ public final class AIBuildCommand implements BasicCommand {
         plugin.store().save(b);
         BuildMode mode = ma.mode() != null ? ma.mode() : plugin.modeOf(owner);
         plugin.pipeline().startCreate(b, prompt, anchor, mode);
-        Msg.send(s, "<gray>ИИ (<white><v0></white>, режим <light_purple><v3></light_purple>, <v4>) начал проектирование постройки <white>[<v1>]</white>: <italic><v2></italic></gray>",
+        announce(s, "<gray>ИИ (<white><v0></white>, режим <light_purple><v3></light_purple>, <v4>) начал проектирование постройки <white>[<v1>]</white>: <italic><v2></italic></gray>",
                 plugin.cfg().model, b.id, prompt, mode.title, mode.eta);
-        Msg.send(s, "<dark_gray>Прогресс — в боссбаре. Отменить: /aib cancel. Постройка появится перед вами и будет расти по этапам.</dark_gray>");
+        announce(s, "<dark_gray>Прогресс — в боссбаре. Отменить: /aib cancel " + b.id + ". Постройка появится перед вами и будет расти по этапам.</dark_gray>");
+    }
+
+    private void announce(CommandSender sender, String message, Object... args) {
+        Msg.send(sender,message,args);
+        if (sender.equals(Bukkit.getConsoleSender())) {
+            for (Player player : Bukkit.getOnlinePlayers()) {
+                if (player.isOp() || player.hasPermission("aibuild.admin")) Msg.send(player,message,args);
+            }
+        }
     }
 
     private void edit(CommandSender s, String[] a0) {
@@ -304,7 +313,8 @@ public final class AIBuildCommand implements BasicCommand {
             Job j = plugin.pipeline().jobFor(b.id);
             Msg.raw(s, "<click:run_command:'/aib select " + b.id + "'><hover:show_text:'Выбрать'> <v0><aqua>[<v1>]</aqua> <white><v2></white> <gray>v<v3>/<v4> · <v5> · <v6><v7></gray></hover></click>",
                     b.id.equals(active) ? "▶ " : "  ", b.id, b.name, Math.max(0, b.currentVersion + 1), b.versions.size(),
-                    b.ownerName, b.worldName + " " + b.originX + "," + b.originY + "," + b.originZ, j != null ? " · ИИ: " + j.status : "");
+                    b.ownerName, b.worldName + " " + b.originX + "," + b.originY + "," + b.originZ,
+                    (b.current()!=null && Boolean.FALSE.equals(b.current().approved)?" · ЧЕРНОВИК":"")+(j != null ? " · ИИ: " + j.status : ""));
         }
     }
 
@@ -338,11 +348,14 @@ public final class AIBuildCommand implements BasicCommand {
                 new SimpleDateFormat("dd.MM HH:mm").format(new Date(b.createdAt)));
         Msg.raw(s, "<gray>  Запрос: <white><v0></white></gray>", clip(b.originalPrompt, 200));
         Msg.raw(s, "<gray>  Мир <v0> @ <v1> <v2> <v3>, поворот <v4>°</gray>", b.worldName, b.originX, b.originY, b.originZ, b.rotation * 90);
+        if (b.current()!=null && b.current().approved!=null) Msg.raw(s,Boolean.TRUE.equals(b.current().approved)
+                ? "<green>  Проверка пройдена.</green>" : "<yellow>  ЧЕРНОВИК: проверка не пройдена. /aib edit для исправления.</yellow>");
         for (int i = 0; i < b.versions.size(); i++) {
             BuildVersion v = b.versions.get(i);
             Msg.raw(s, "<gray>  <v0>v<v1>: <white><v2></white> · <v3> блоков · оценка <v4><v5></gray>", i == b.currentVersion ? "▶ " : "  ",
                     v.number, clip(v.request, 70), v.model == null ? 0 : v.model.nonAirCount(), v.score,
-                    v.mode == null ? "" : " · режим " + plugin.cfg().mode(v.mode).title);
+                    (v.mode == null ? "" : " · режим " + plugin.cfg().mode(v.mode).title)
+                            +(Boolean.FALSE.equals(v.approved)?" · ЧЕРНОВИК":""));
         }
         Job j = plugin.pipeline().jobFor(b.id);
         if (j != null) Msg.raw(s, "<yellow>  ИИ: <v0> (<v1>%, <v2> c)</yellow>", j.status, (int) (j.progress * 100), j.elapsedSeconds());
@@ -406,6 +419,8 @@ public final class AIBuildCommand implements BasicCommand {
         v.model = m;
         v.createdAt = System.currentTimeMillis();
         v.score = b.current().score;
+        v.mode = b.current().mode;
+        if (Boolean.FALSE.equals(b.current().approved)) v.approved=false;
         while (b.versions.size() > b.currentVersion + 1) b.versions.remove(b.versions.size() - 1);
         b.versions.add(v);
         b.currentVersion = b.versions.size() - 1;

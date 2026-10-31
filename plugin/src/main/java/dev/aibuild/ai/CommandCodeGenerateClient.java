@@ -337,6 +337,7 @@ public class CommandCodeGenerateClient extends AbstractStreamingClient {
     private static final class Accumulator {
 
         private final StringBuilder content = new StringBuilder();
+        private final OperationLoopGuard loopGuard = new OperationLoopGuard();
         private final StringBuilder reasoning = new StringBuilder();
         private final Progress progress;
         private final AtomicBoolean cancelled;
@@ -431,6 +432,10 @@ public class CommandCodeGenerateClient extends AbstractStreamingClient {
                         appendText(event);
                     }
                 }
+            }
+            if (loopGuard.looping(content)) {
+                failure = LlmException.invalidResponse("repetitive build operations in stream", null);
+                return ApplyResult.FAILED;
             }
             progress.maybe(content.length(), reasoning.length());
             return ApplyResult.OK;

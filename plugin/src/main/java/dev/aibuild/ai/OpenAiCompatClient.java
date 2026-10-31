@@ -286,6 +286,7 @@ public class OpenAiCompatClient extends AbstractStreamingClient {
     private static final class Accumulator {
 
         private final StringBuilder content = new StringBuilder();
+        private final OperationLoopGuard loopGuard = new OperationLoopGuard();
         private final StringBuilder reasoning = new StringBuilder();
         private final Progress progress;
         private final AtomicBoolean cancelled;
@@ -340,6 +341,10 @@ public class OpenAiCompatClient extends AbstractStreamingClient {
                 }
                 if (delta != null) {
                     appendDelta(delta);
+                    if (loopGuard.looping(content)) {
+                        failure = LlmException.invalidResponse("repetitive build operations in stream", null);
+                        return ApplyResult.FAILED;
+                    }
                 }
             }
             if (ef == null) {

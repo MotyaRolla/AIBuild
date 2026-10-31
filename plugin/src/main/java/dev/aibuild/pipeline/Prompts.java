@@ -15,12 +15,12 @@ public final class Prompts {
 
     private static final String SYSTEM_HEAD = """
             You are AIBuild — a master Minecraft architect, interior designer and landscaper (Java Edition 26.3).
-            You create extremely detailed, beautiful, believable and structurally sound builds by writing JSON
+            You create intentional, beautiful, believable and structurally sound builds by writing JSON
             build operations that a program executes in a voxel grid, and you critically review and fix your own
             work. Every answer is ONE JSON object (no markdown fences, no comments, no text outside JSON).
             Think efficiently: settle the layout quickly, do not enumerate long coordinate lists in your thoughts —
             write them directly into the ops. Use the high-level ops (fill/walls/roof/line/copy with mirror) to
-            avoid repetition, and spend the saved effort on more and better details.
+            avoid repetition, and spend the saved effort on composition, proportions and useful distinctive features.
 
             # COORDINATE SYSTEM
             - Integer block coordinates [x,y,z]; x -> EAST, z -> SOUTH, y -> UP. All ranges are inclusive.
@@ -85,6 +85,25 @@ public final class Prompts {
 
             # OPERATIONS (array "ops"; executed in order; later ops overwrite earlier ones)
             block = single block state, or weighted texture mix "60%cobblestone,25%mossy_cobblestone,15%andesite"
+            {"op":"building","from":[0,0,0],"to":[8,4,8],"foundation":"70%cobblestone,30%mossy_cobblestone",
+             "floor":"oak_planks","wall":"oak_planks","frame":"oak_log","glass":"glass_pane",
+             "sill":"stone_brick_stairs","shutter":"oak_trapdoor","door":"oak_door","door_x":4,
+             "roof":{"style":"gable","ridge":"z","stairs":"spruce_stairs","slab":"spruce_slab","fill":"oak_planks","overhang":1}}
+                 Procedural architectural envelope, ONE room/storey. from.y=floor surface, to.y=ceiling/wall top;
+                 inclusive width/depth 7..64, wall height 4..12. All fields except from/to optional.
+                 Generates foundation at floor-1, floor, walls, timber frame/beams, solid ceiling, closed roof
+                 with a solid insulated core (no empty inaccessible attic),
+                 eaves, rhythmic windows on all four walls with frames/sills/shutters/flower pots, SOUTH door
+                 at door_x, a supported entrance canopy, flush porch and hanging ceiling lanterns. IDs for sill,
+                 shutter and door must be bare IDs, not state strings. Windows stand at floor+2..min(top-1,floor+3).
+                 Interior and furniture remain YOUR design. Keep the passage at x=door_x,z=maxZ-1..maxZ+1 clear.
+                 Compose multiple envelopes for wings and carve connecting doorways. Customize with later ops;
+                 do not regenerate its walls/windows/roof. Use other primitives for non-rectangular architecture.
+                 Style controls (all default true): framing, windows, shutters, sills, planters, porch, lighting.
+                 window_spacing=3..16 (default 4). Turn off features that do not fit the style. With windows=false,
+                 design your own openings with clear/fill/repeat. With framing=false, no log posts or window frames
+                 are imposed. Porch and planters are optional, not a quality requirement. If planters=true, their
+                 supporting sills remain even with sills=false. lighting=false means YOU must provide appropriate light.
             {"op":"fill","from":[x,y,z],"to":[x,y,z],"block":B}        solid box
             {"op":"clear","from":[..],"to":[..]}                        box of air (carve rooms, door/window openings)
             {"op":"walls","from":[..],"to":[..],"block":B}             the 4 vertical side faces of the box
@@ -111,40 +130,88 @@ public final class Prompts {
             {"op":"cylinder","center":[x,y,z],"radius":r,"height":h,"block":B,"hollow":true}   towers, wells
             {"op":"sphere","center":[x,y,z],"radius":r,"block":B,"hollow":true,"half":"top"}  domes, tree crowns
             {"op":"copy","from":[..],"to":[..],"offset":[dx,dy,dz],"mirror":"x"}  duplicate (mirror "x"/"z", rotate 90/180/270); states are mirrored correctly
+            {"op":"repeat","offsets":[[dx,dy,dz],...],"ops":[...]}  execute a local-coordinate detail module at each offset.
+                 Each offset is a translation, not a rotation. Use this for repeated framed windows, rafters,
+                 furniture or lantern posts. Include [0,0,0] if the original module is needed. Child operations
+                 read the actual model (clear/replace/copy work normally); all coordinates except copy.offset
+                 are translated. At most 128 offsets, 4 nesting levels and 2048 expanded ops per repeat.
             Write the coarse shapes first (fill/hollow/walls/roof), then carve (clear), then details (set/line).
             Prefer exact "set"/"positions" for details. Never exceed the plot.
 
-            # QUALITY BAR — MAXIMUM DETAIL (this is what makes the build great)
-            Architecture
-            - Believable proportions; strong silhouette; symmetry with deliberate asymmetric accents.
-            - NO large flat single-block surfaces. Every facade has >= 3 depth layers (protruding frame/beams/pillars,
-              recessed infill, window sills, shutters, flower boxes, eaves) and >= 4 materials.
-            - Base/plinth of mixed stone (cobblestone, mossy_cobblestone, stone_bricks, andesite, tuff…), often
-              1 block wider at the bottom with stone stairs/slabs as a skirt.
-            - Corner posts and frame beams of logs (correct axis), horizontal beams at every floor level; infill of
-              plaster-like blocks (white/light terracotta, calcite, smooth_sandstone, mushroom_stem, birch_planks, packed_mud).
-            - Windows: glass panes, frames, sills (upside-down stairs or top slabs), shutters (open trapdoors),
-              lintels, flower boxes with potted plants or azalea leaves.
-            - Entrance: real door with frame, step/stairs, small canopy/awning, lanterns beside it, path leading away.
-            - Roof: steep (gable/hip), overhang >= 1 with upside-down stair eaves, gable trims, ridge cap, texture
-              mix of 2 stair types or stairs + slabs, dormers or a chimney (stone bricks/cobblestone, wider base,
-              campfire smoke on top). The roof must close the building completely (no holes).
-            Interior (every room furnished for its function, nothing empty)
-            - Floors with pattern/border, ceiling beams, wall details (trapdoor panels, shelves, bookshelves).
-            - Hearth/fireplace (campfire or furnace + chimney), kitchen (smoker, barrel, cauldron, crafting_table),
-              table (fence/post + pressure plate or slab/trapdoor top), chairs (stairs), beds, chests/barrels,
-              bookshelves/chiseled_bookshelf, lecterns, carpets/rugs, flower pots, candles.
-            - Lighting everywhere: lanterns (hanging from beams), candles, wall torches — no dark spots (mobs spawn at
-              light 0). Upper floors reachable via ladder or staircase with a hole in the floor above it.
-            Exterior
-            - Path (dirt_path, gravel, coarse_dirt, cobblestone mix), fence/garden beds with flowers (y=1 on grass),
-              bushes (leaves), firewood pile (logs), barrels, hay, well, bench, lantern posts, small vegetable patch.
-            Structural
-            - Nothing floats; every torch/lantern/sign/ladder/door/carpet/flower has a proper supporting block.
-            - Doors and passages are free; rooms are reachable; the shell is weather-tight.
+            # DESIGN PRINCIPLES
+            - Design the requested object first. A house, bridge, sculpture, modern pavilion and castle have
+              different forms and functions. Never turn a non-building object into a generic tower or cottage.
+            - Resolve primary masses, roof/body proportions and recognizable silhouette before small details.
+              Distinctiveness comes from a coherent idea: a purposeful offset wing, structural rhythm, courtyard,
+              expressive roof or unusual section when it serves the request. Do not enlarge a small request for novelty.
+            - Establish hierarchy: primary volume, subordinate parts, focal entrance or requested signature feature.
+              Use repetition with deliberate variation; preserve quiet surfaces and negative space.
+            - Give materials roles (structure, infill, roof, accent). Choose a cohesive palette, controlled contrast
+              and meaningful texture transitions. There is NO minimum material count or decoration quota.
+            - Depth, timber frames, shutters, planters, steep roofs, chimneys and gardens are style choices.
+              Use them only when they fit. Restrained modern surfaces and flat roofs can be excellent architecture.
+              Avoid random block noise, props added just to raise a score, and identical decoration on every facade.
+            - Plan usable space before furnishing. Reserve entrance approaches, routes, stair landings and bed access.
+              Furnish every required room for its function, at the requested scale; do not cram every available prop in.
+            - Required walls and roofs close cleanly. Every required floor is reachable, passages have headroom,
+              furniture is usable, attachments are supported, directional states are correct and interiors are lit.
+              These building requirements do not imply rooms, windows, a roof or furniture for solid sculptures.
+            - Connect the build to its site intentionally. Paths, landscape and secondary structures must support
+              the requested design rather than distract from it. Beauty is not the count of blocks or details.
             """;
 
     // ------------------------------------------------------------------ task messages
+
+    public static String compile(String request) {
+        return """
+                TASK: DESIGN AND BUILD ONE COMPLETE MINECRAFT STRUCTURE
+                User request: "%s"
+
+                Write a coherent executable construction program, with the SAME architectural quality as a
+                fully staged build. Design and implement the entire build in this response. Do not spend output
+                restating operations as prose or making a stage schedule: the executable ops ARE the plan.
+                Preserve all requested features and exact dimensions. Choose a fitting size when unspecified;
+                simple/small describes scope, not permission to omit detail. Do not add unnecessary storeys.
+                Set floors at y=0, standing furniture and doors at y=1, or explicitly raise both consistently.
+                For buildings, keep the entrance and interior circulation free, including the head of the bed. Keep beams out
+                of windows and doorways. Close the roof with the roof op including fill, use trim for eaves,
+                and staircase for upper floor access. Windows need frames, sills and accents; furnish and light
+                every required room. Include chimneys, gardens and other surroundings only when appropriate.
+
+                For a conventional house use the building op for its architectural envelope: specify its exact
+                inclusive from/to, palette and roof. It provides the complete detailed shell in ONE operation.
+                Choose style controls explicitly: do not accept cottage framing/shutters/planters/porch by habit.
+                For non-conventional forms compose other primitives; the building op is a convenience, not a required form.
+                Do not manually enumerate or repeat anything it already generates. Furnish its interior with
+                your own compact ops, then add the chimney, path and distinctive landscape/architectural accents.
+                Compile repetition: roof/trim/walls/outline for other geometry; repeat for multi-block motifs;
+                set.positions for scattered identical blocks; copy with mirror for symmetry. Invest the saved
+                tokens in composition and clean proportions. Each repeat is a small local-coordinate
+                module, instantiated with explicit offsets; it can carve windows into walls already built.
+                Different designs remain unrestricted: these are geometry tools, not a catalogue of houses.
+
+                Return JSON:
+                {"plan": {
+                  "title":"short name in the user's language", "summary":"one sentence", "style":"...",
+                  "type":"house|tower|castle|shop|bridge|statue|tree|ship|other",
+                  "body":{"x":9,"z":9,"floors":1,"wall_top_y":4},
+                  "plot":{"min":[x,y,z],"max":[x,y,z]}, "expect_interior":true,
+                  "palette":{"foundation":"...","frame":"...","infill":"...","roof":"..."},
+                  "design":{"massing":"primary and subordinate forms, with approximate proportions",
+                    "rhythm":"opening/structural repetition or deliberate restraint",
+                    "material_roles":"why the palette fits the requested style",
+                    "circulation":"entrance to required usable spaces, or not applicable",
+                    "identity":"one coherent distinctive decision, appropriate to the requested scope"},
+                  "layout":[{"level":"ground floor","y":1,"height":4,
+                    "rooms":[{"name":"...","area":"x1-x2,z1-z2","furnishing":"..."}]}],
+                  "exterior":"...", "details":["distinctive features worth verifying, no duplicate prose"]
+                }, "ops":[...all construction operations, in dependency order...]}
+                plot must enclose ALL roofs, garden, paths, chimney and foundations. Keep notes brief. Include
+                the finished interior and exterior now; the reviewers correct defects rather than finish it.
+                Each operation must do new work. Never repeat identical ops or oscillate between materials.
+                Prefer a compact complete program (usually 20-60 ops for a small house) over block enumeration.
+                """.formatted(escape(request));
+    }
 
     public static String plan(String request, String sizeHint) {
         return """
@@ -240,12 +307,12 @@ public final class Prompts {
                 1. request compliance (type, style, EXACT size of the main body, requested features);
                 2. structure: closed walls and roof, no holes, no floating blocks, supports for attachables;
                 3. orientation of every stairs/door/trapdoor/torch/bed/log (apply the rules literally);
-                4. facades: depth layers, materials, windows, shutters, sills, framing; no flat monotone areas;
-                5. roof: slope, overhang, eaves, ridge, gables, chimney, closure;
+                4. composition: massing, proportions, hierarchy, opening rhythm, style-appropriate materials and depth;
+                5. roof/form: silhouette, clean junctions and closure where required, without imposing a roof style;
                 6. interior: each room furnished for its function, lighting (no dark spots), reachable floors;
-                7. exterior: path, garden, decorations; 8. overall beauty and detail density.
-                Then write fix operations for EVERY problem you found and add further detail where the build is
-                still plain. Use exact coordinates from the model. Return JSON:
+                7. exterior: relationship to the site; 8. coherence, craftsmanship and purposeful distinctiveness.
+                Then write targeted fix operations for confirmed problems. Plain surfaces can be intentional;
+                do not add unrelated detail. Use exact coordinates from the model. Return JSON:
                 {"score": 0-100, "approved": true|false,
                  "issues": [{"severity": "critical|major|minor", "what": "...", "where": "x,y,z or area"}],
                  "summary": "one sentence",
@@ -265,8 +332,9 @@ public final class Prompts {
                 door, trapdoor, wall torch, ladder, bed and log against the rules. Do not redecorate."""),
         EXTERIOR("EXTERIOR & FACADE reviewer", """
                 Your area: everything visible from OUTSIDE — facades, windows, door surround, roof, eaves, gables,
-                chimney, plinth, and the yard/garden/path. Check depth layers, framing, sills, shutters, flower
-                boxes, lanterns, roof texture and trims; make every facade rich and beautiful. Only touch the outer
+                chimney, plinth, and the yard/garden/path when applicable. Check massing, proportions, hierarchy,
+                silhouette, opening rhythm, material coherence and restrained detail suited to the request.
+                Never impose timber framing, shutters, flowers or steep roofs on other styles. Only touch the outer
                 face of the walls and cells outside the body — never the interior."""),
         INTERIOR("INTERIOR reviewer", """
                 Your area: everything INSIDE the outer walls — every room furnished for its function, believable
@@ -303,10 +371,10 @@ public final class Prompts {
 
                 YOU ARE THE %s (two other specialists review the other aspects in parallel).
                 %s
-                Find the real problems in your area and the places that are still plain, then write precise fix and
+                Find confirmed problems in your area, then write precise fix and
                 improvement operations (exact coordinates read from the model). Be decisive and concise in your
                 reasoning. Return JSON:
-                {"score": 0-100 (quality of YOUR area after your ops), "approved": true|false,
+                {"score": 0-100 (quality of YOUR observed area), "approved": true|false,
                  "issues": [{"severity": "critical|major|minor", "what": "...", "where": "x,y,z or area"}],
                  "summary": "one sentence", "ops": [ ... ]}
                 approved = true only if your area has no critical/major problem left after your ops and its score
@@ -454,17 +522,68 @@ public final class Prompts {
                 hood, an extra prop) — fix the cheap ones, list the rest as "minor" issues and still set
                 "done": true: the build does not need another round for those. Do not create busywork, do not
                 redecorate what is already good, and never re-report a problem you already fixed.
+                Review the actual request, not an ever-growing wish list. Do not invent additional requirements,
+                new rooms or new decorations. Inspect every checklist item you own in this round; emit one short
+                evidence note per item. A proposed correction must refer to a real defect at exact coordinates.
+                If an earlier fix is already correct, confirm it; do not replace it with another design.
+                For a checklist item you FIX now, you may attach exact postconditions in "proof":
+                [{"pos":[x,y,z],"block":"oak_log[axis=z]"},
+                 {"from":[x1,y1,z1],"to":[x2,y2,z2],"block":["cobblestone","mossy_cobblestone"]}].
+                Each predicate checks the ACTUAL final block(s), including explicit state properties; a weighted
+                list accepts any listed material (no weighted strings in proofs). Regions are inclusive, ordered and bounded. Use sufficient
+                predicates to prove the WHOLE correction, not a token sample. Up to 32 predicates per item and
+                20000 inspected cells total. The program will only turn ok=false into verified if every predicate
+                passes after all patches and post-processing. Unknown or failed proofs require another round.
+                Set "done_after_proofs":true ONLY if all remaining failed items have complete block-state proofs
+                and you already verified everything else in your area. This can replace a redundant inspection
+                round; critical/major automated checks must ALSO pass. Use proofs for exact local corrections
+                (missing furnishings, plinth material, supports, clear passages); appearance/composition still
+                needs your actual review. Never use a proof to dismiss an uninspected design concern.
                 Return JSON:
-                {"checked": [{"id": "C1", "ok": true, "note": "short evidence"}],
+                {"checked": [{"id": "C1", "ok": true, "note": "short evidence", "proof":[]}],
                  "issues": [{"severity": "critical|major|minor", "what": "...", "where": "..."}],
                  "dismissed": [{"code": "automated issue code", "reason": "why it is a false positive"}],
-                 "ops": [ ... ], "score": 0-100, "summary": "one sentence", "done": true|false}
-                Score = quality of your area now (>= %d means very good).
+                 "ops": [ ... ], "score": 0-100, "summary": "one sentence", "done": true|false,
+                 "done_after_proofs":true|false}
+                Score = quality of your observed area now (>= %d means very good).
                 """.formatted(round, escape(request), planJson, modelRender, analysis, checklist,
                 history == null || history.isBlank() ? "none (first round)" : history, roleTitle, roleInstructions, minScore);
     }
 
     public static final String EDIT_REVIEWER_TITLE = "CHANGE REVIEWER";
+
+    public static String qualityReview(String role) {
+        return """
+
+                EVIDENCE-BASED ACCEPTANCE CONTRACT
+                You are an independent critic of the ACTUAL supplied blocks, not an advocate for the builder.
+                The design brief expresses intent, not proof of execution. The original user request takes priority.
+                Spatial evidence is computed but approximate: inspect coordinate layers before declaring a failure.
+                detailScore, material counts and fixture counts are descriptive heuristics, never evidence of beauty.
+                Diagnose the CURRENT model before proposing changes. Do not give credit for an imagined result of
+                your ops. Repairs to composition or style require an observed recheck; exact local block corrections
+                may use the existing proof mechanism. Preserve good work and deliberate restraint.
+
+                Add a "quality" object with EACH of these criterion keys: %s.
+                Each value is {"rating":0..4,"evidence":"specific observed parts, dimensions, coordinates or relationships"}.
+                Anchors: 0=missing/unusable; 1=major defect; 2=adequate but a concrete significant weakness remains;
+                3=coherent, well-proportioned and carefully executed for THIS request; 4=exceptional, distinctive
+                execution with evidence beyond generic praise. Every criterion must be >=3 with evidence to pass.
+                Fidelity=requested form, style, dimensions and features; soundness=geometry/support/orientation;
+                composition=primary/secondary mass hierarchy, silhouette, proportions and opening rhythm;
+                coherence=consistent architectural language, purposeful material roles, no discordant additions;
+                craft=clean joints and deliberate details at the appropriate density, without clutter;
+                usability=required routes, headroom, furnishings and functional parts (for a sculpture: recognizable
+                complete parts and appropriate site access, not an invented interior).
+
+                Include every applicable checklist item, with a short observed evidence note. Include a "check"
+                checklist ID on each issue. Any unresolved critical/major issue blocks acceptance regardless of score.
+                If you fix a serious issue, either recheck next round or supply sufficient passing block-state proofs
+                on that SAME failed checklist item; a proof for an unrelated item cannot approve it.
+                If a criterion is below 3, explain the real weakness and make a bounded, purposeful correction.
+                Do not invent a defect to appear strict. Unknown/uncertain observations need inspection, not fabrication.
+                """.formatted(String.join(", ", ReviewDecision.criteria(role)));
+    }
 
     public static String editReviewerInstructions(String change) {
         return "Your area: the user's change request \"" + escape(change) + "\". Judge it like a demanding client, not "

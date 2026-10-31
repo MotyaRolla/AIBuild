@@ -48,9 +48,9 @@ public final class BuildMode {
                 "off", "off", "off", "off", "off", 3, 1, 32000, true));
         m.put(LIGHT, new BuildMode(LIGHT, "Лёгкое думание", "~8–11 мин",
                 "off", "low", "off", "off", "low", 2, 1, 60000, true));
-        m.put(STANDARD, new BuildMode(STANDARD, "Стандарт", "~14–18 мин",
-                "off", "low", "low", "off", "low", 3, 1, 60000, true));
-        m.put(EXTRA, new BuildMode(EXTRA, "Экстра-думание", "~35–60 мин",
+        m.put(STANDARD, new BuildMode(STANDARD, "Стандарт", "время зависит от сложности",
+                "off", "low", "low", "low", "low", 3, 1, 60000, false));
+        m.put(EXTRA, new BuildMode(EXTRA, "Экстра-думание", "время зависит от сложности",
                 "low", "high", "high", "low", "high", 3, 2, 200000, true));
         return m;
     }

@@ -22,7 +22,8 @@ public final class ModesCheck {
         BuildMode l = c.modes.get("light");
         check("low".equals(l.effortBuild) && "off".equals(l.effortReview), "light: low build, no-think review");
         BuildMode s = c.modes.get("standard");
-        check("low".equals(s.effortBuild) && "low".equals(s.effortReview) && "off".equals(s.effortReviewFollowup) && s.verifyRounds == 3, "standard = previous behaviour");
+        check("low".equals(s.effortBuild) && "low".equals(s.effortReview) && "low".equals(s.effortReviewFollowup) && s.verifyRounds == 3, "standard keeps thinking in follow-up reviews");
+        check(!s.parallelReview && c.modes.get(BuildMode.EXTRA).parallelReview, "standard coherent audit; extra specialist audits");
         BuildMode e = c.modes.get("extra");
         check("high".equals(e.effortBuild) && "high".equals(e.effortReview) && e.maxTokens == 200000, "extra high + big budget");
         for (String[] t : new String[][]{{"0", "fast"}, {"без", "fast"}, {"быстрый", "fast"}, {"--off", "fast"}, {"1", "light"},
@@ -43,4 +44,5 @@ public final class ModesCheck {
         System.out.println("ModesCheck: " + pass + " passed, " + fail + " failed");
         if (fail > 0) System.exit(1);
     }
+
 }

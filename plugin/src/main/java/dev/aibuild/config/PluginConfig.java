@@ -28,6 +28,7 @@ public final class PluginConfig {
     public final String reviewStrategy;
     /** "planned" (edit plan + steps) or "direct" (one call). */
     public final String editStrategy;
+    public final String createStrategy;
     public final int adaptiveMaxRounds;
     public final String judgeEffort;
     public final boolean repairFailedOps;
@@ -93,6 +94,8 @@ public final class PluginConfig {
         reviewStrategy = rs.equals("fixed") ? "fixed" : "adaptive";
         String es = c.getString("generation.edit-strategy", "plan").trim().toLowerCase(java.util.Locale.ROOT);
         editStrategy = es.equals("direct") || es.equals("steps") ? es : "plan";
+        createStrategy = "staged".equalsIgnoreCase(c.getString("generation.create-strategy", "compiled"))
+                ? "staged" : "compiled";
         adaptiveMaxRounds = Math.max(1, Math.min(12, c.getInt("generation.adaptive-max-rounds", 6)));
         judgeEffort = BuildMode.effort(c.getString("bench.judge-effort", "high"));
         autoOrient = c.getBoolean("generation.auto-orient", true);

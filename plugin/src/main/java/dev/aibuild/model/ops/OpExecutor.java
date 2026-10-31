@@ -69,7 +69,7 @@ public final class OpExecutor {
 
     private static final List<String> KNOWN_OPS = List.of(
             "box", "clear", "copy", "cylinder", "fill", "hollow", "line", "outline", "replace",
-            "roof", "set", "sphere", "walls");
+            "roof", "set", "sphere", "walls", "repeat", "trim", "staircase", "building");
 
     private final BlockInfo info;
     private final int maxOpVolume;
@@ -245,6 +245,8 @@ public final class OpExecutor {
             case "line" -> "line";
             case "replace" -> "replace";
             case "roof" -> "roof";
+            case "repeat" -> "repeat";
+            case "building" -> "building";
             case "staircase", "stairway", "flight", "stair_flight", "stairs_flight", "steps" -> "staircase";
             case "trim", "skirt", "eaves", "eave", "cornice", "stair_ring", "ring" -> "trim";
             default -> null;
@@ -259,6 +261,11 @@ public final class OpExecutor {
         if (el.isJsonArray()) return el.getAsJsonArray();
         if (el.isJsonObject()) {
             JsonObject o = el.getAsJsonObject();
+            if ("repeat".equalsIgnoreCase(OpArgs.str(o, "", "op", "action", "cmd", "type"))) {
+                JsonArray a = new JsonArray();
+                a.add(o);
+                return a;
+            }
             JsonElement inner = OpArgs.field(o, "ops", "operations", "actions", "commands");
             if (inner != null) {
                 if (inner.isJsonArray()) return inner.getAsJsonArray();
@@ -288,6 +295,23 @@ public final class OpExecutor {
 
     private boolean execute(VoxelModel model, JsonObject op, String name, String prefix, OpResult res) {
         switch (name) {
+            case "repeat", "building" -> {
+                JsonArray expanded = name.equals("repeat") ? ProgramCompiler.expand(op) : BuildingCompiler.compile(op, info);
+                OpResult child = new OpExecutor(info, maxOpVolume, maxAbsCoord, maxModelCells)
+                        .withLimits(limits).apply(model, expanded);
+                res.cellsChanged += child.cellsChanged;
+                for (String error : child.errors) res.error(prefix + ": " + error);
+                res.warnings.addAll(child.warnings);
+                res.info.addAll(child.info);
+                res.doorways.addAll(child.doorways);
+                if (name.equals("building") && !child.hasErrors()) {
+                    int[][] region = requireRegion(op);
+                    int x = OpArgs.integer(op,(region[0][0]+region[1][0])/2,"door_x");
+                    int y = Math.min(region[0][1],region[1][1])+1, z = Math.max(region[0][2],region[1][2]);
+                    res.doorways.add(new Doorway(x,y,z,info.parse(OpArgs.str(op,"oak_door","door")+"[facing=north]")));
+                }
+                return !child.hasErrors();
+            }
             case "fill" -> {
                 int[][] r = requireRegion(op);
                 int[] from = r[0], to = r[1];
