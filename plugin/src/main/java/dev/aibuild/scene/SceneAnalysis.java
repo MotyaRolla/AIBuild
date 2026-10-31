@@ -154,6 +154,18 @@ public final class SceneAnalysis {
                     + " объектов — декор (" + (int) (detailShare * 100) + "%), постройка будет плоской"));
         }
 
+        // ---- roof coverage ------------------------------------------------------------------
+        // A gable roof described by one prism can still end up full of holes after the model adds
+        // beams, dormers and chimneys on top of it. Checking the voxels is the only way to see it.
+        if (hasRoof) {
+            int[] holes = roofHoles(spec);
+            if (holes[0] > 0 && holes[1] > 0 && holes[0] * 100 / holes[1] > 8) {
+                out.add(new Finding(Severity.MAJOR, "дырявая крыша: над " + holes[0] + " из " + holes[1]
+                        + " колонн корпуса нет сплошного покрытия — проверьте prism (overhang, pitch) и не "
+                        + "перекрывают ли его балки/труба"));
+            }
+        }
+
         // ---- palette -----------------------------------------------------------------------
         if (paletteKeys.size() <= 2 && objects.size() > 8) {
             out.add(new Finding(Severity.MINOR, "в палитре всего " + paletteKeys.size() + " материала — постройка будет однообразной"));
@@ -184,6 +196,69 @@ public final class SceneAnalysis {
             }
         }
         return best;
+    }
+
+    /**
+     * Counts the columns of the building body that have no roof material above them.
+     *
+     * <p>Works on the voxel model, because that is the only place where the real shape exists: a prism with a
+     * pitch that is too shallow, or a beam laid over the ridge, can leave the roof open even though the spec
+     * contains a roof object.</p>
+     *
+     * @param spec the scene
+     * @return {@code {columnsWithoutRoof, columnsInBody}}
+     */
+    static int[] roofHoles(SceneSpec spec) {
+        dev.aibuild.model.VoxelModel model;
+        try {
+            model = SceneGeometry.build(spec);
+        } catch (RuntimeException e) {
+            return new int[]{0, 0};
+        }
+        int[] b = model.bounds();
+        if (b[3] < b[0]) return new int[]{0, 0};
+        int[] body = mainBodyBox(spec.objects());
+        if (body == null) body = new int[]{b[0], b[2], b[2]};
+        int missing = 0;
+        int total = 0;
+        for (int x = body[0]; x <= body[1]; x++) {
+            for (int z = body[2]; z <= body[3]; z++) {
+                total++;
+                boolean roofed = false;
+                for (int y = b[4]; y >= b[1]; y--) {
+                    if (!model.isSet(x, y, z)) continue;
+                    String name = model.get(x, y, z).name();
+                    // roof families in the default block table: planks, stairs, slabs, tiles
+                    if (name.contains("planks") || name.contains("stairs") || name.contains("slab")
+                            || name.contains("tiles") || name.contains("shingle")) {
+                        roofed = true;
+                        break;
+                    }
+                }
+                if (!roofed) missing++;
+            }
+        }
+        return new int[]{missing, total};
+    }
+
+    /**
+     * @return the x/z extent of the largest wall or roof object, or {@code null}
+     */
+    private static int[] mainBodyBox(List<SceneObject> objects) {
+        int best = 0;
+        int[] box = null;
+        for (SceneObject o : objects) {
+            if (!o.type().equals("box") && !o.type().equals("prism")) continue;
+            int[] from = o.from();
+            int[] to = o.to();
+            if (from == null || to == null) continue;
+            int area = (to[0] - from[0] + 1) * (to[2] - from[2] + 1);
+            if (area > best) {
+                best = area;
+                box = new int[]{from[0], to[0], from[2], to[2]};
+            }
+        }
+        return box;
     }
 
     private static boolean hasOpening(SceneObject o, String kind) {

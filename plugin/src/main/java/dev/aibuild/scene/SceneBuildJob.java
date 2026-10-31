@@ -13,6 +13,7 @@ import dev.aibuild.build.BuildStore;
 import dev.aibuild.build.BuildVersion;
 import dev.aibuild.config.BuildMode;
 import dev.aibuild.config.PluginConfig;
+import dev.aibuild.model.BlockSpec;
 import dev.aibuild.model.VoxelModel;
 import dev.aibuild.pipeline.BuildPipeline;
 import dev.aibuild.util.Json;
@@ -29,6 +30,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 
 import java.awt.image.BufferedImage;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -122,6 +124,8 @@ public final class SceneBuildJob {
     private volatile String status = "Ожидание";
     private volatile double progress;
     private volatile String buildId;
+    /** The design brief as JSON, kept for the critic and the detailing pass. */
+    private volatile String planJson = "";
     private volatile int streamChars;
     private volatile int reasoningChars;
     private final List<Version> history = new ArrayList<>();
@@ -316,6 +320,12 @@ public final class SceneBuildJob {
                     spec.bounds()[2][0], spec.bounds()[2][1], spec.bounds()[2][2]);
 
             double prevScore = Double.NaN;
+            // Score of the last version whose patch survived the next critique. A patch that lowers the
+            // score is rolled back: without this the loop walked 55 -> 35 -> 30 in a live test, because
+            // every individual patch looked like an improvement to the model that wrote it.
+            double acceptedScore = Double.NaN;
+            SceneSpec acceptedSpec = spec;
+            int rollbacks = 0;
             int stalls = 0;
             String stopReason = "достигнут лимит итераций";
             boolean renderingWorked = false;
@@ -341,15 +351,32 @@ public final class SceneBuildJob {
                 double gain = Double.isNaN(prevScore) ? score : Math.round((score - prevScore) * 10.0) / 10.0;
                 prevScore = score;
 
+                // Roll back a patch that made the building worse. The critic is not perfect: it can ask for
+                // a change that its own next review scores lower. Keeping the better version and dropping
+                // the patch is what makes the loop monotonic instead of a random walk.
+                boolean regressed = !Double.isNaN(acceptedScore) && score < acceptedScore - 0.5;
+                if (regressed) {
+                    rollbacks++;
+                    plugin.getLogger().info("scene iteration " + iteration + ": score " + Math.round(score)
+                            + " < accepted " + Math.round(acceptedScore) + ", rolling back");
+                    say("<gray>итерация <white><v0>/<v1></white>: оценка <v2> ниже принятой <v3> — откатываю правку</gray>",
+                            iteration, maxIterations, (int) Math.round(score), (int) Math.round(acceptedScore));
+                    spec = acceptedSpec;
+                }
+
                 // The scene that was just rendered and judged is the one that goes into history: its
                 // score belongs to it. The patch it asked for becomes the NEXT iteration's input, so a
                 // version is only ever built in the world after the critic has seen it.
-                SceneSpec evaluated = spec;
+                SceneSpec evaluated = regressed ? acceptedSpec : spec;
                 ScenePatch.Result applied = ScenePatch.EMPTY.apply(evaluated, MAX_OBJECTS);
-                if (!critique.failed() && !cancelled.get()) {
+                if (!regressed && !critique.failed() && !cancelled.get()) {
                     applied = critique.patch().apply(evaluated, MAX_OBJECTS);
                 }
-                if (applied.applied()) spec = applied.spec();
+                if (applied.applied()) {
+                    spec = applied.spec();
+                    acceptedSpec = evaluated;
+                    acceptedScore = Math.max(Double.isNaN(acceptedScore) ? score : acceptedScore, score);
+                }
 
                 Version version = new Version(iteration, evaluated, (int) Math.round(score), critique.critical(),
                         critique.major(), critique.minor(), applied, critique.verdict(),
@@ -381,6 +408,7 @@ public final class SceneBuildJob {
                 }
             }
 
+            plugin.getLogger().info("scene loop finished: " + rollbacks + " patch(es) rolled back");
             Version best = SceneBuildJob.best(history());
             if (best == null) {
                 fail("ни одна итерация не дала версию для постройки", null);
@@ -399,8 +427,13 @@ public final class SceneBuildJob {
                 finishCancelled();
                 return;
             }
+            // ---- post-transfer detailing: the small blocks a 3D scene cannot express ----------
+            DetailingResult detailing = detailAfterPlacement(prompt, best, outcome, mode);
             long seconds = (System.currentTimeMillis() - startedAt) / 1000;
             String id = buildId == null ? "?" : buildId;
+            if (detailing != null && !detailing.decor().isEmpty()) {
+                say("<gray>Доработка мелкими блоками: <white><v0></white></gray>", detailing.text());
+            }
             say("<green><bold>Готово!</bold></green> <white><v0></white> <gray>[<v1>]</gray> — лучшая версия: итерация "
                             + "<white><v2></white>, оценка <white><v3>/100</white>, <white><v4></white> блоков, "
                             + "изменено <white><v5></white> в мире, <v6> c.</gray>",
@@ -427,21 +460,193 @@ public final class SceneBuildJob {
         }
     }
 
+    /** Outcome of the detailing pass. */
+    private record DetailingResult(List<SceneDetailing.Decor> decor, String text) {
+    }
+
+    /**
+     * Runs the post-transfer detailing pass: asks the model for the small blocks that make a build look finished,
+     * validates them against the placed structure and puts them into the world.
+     *
+     * <p>This is the step that has no equivalent inside the 3D scene. A renderer can show a wall, but a lantern on
+     * a chain, a trapdoor used as a shutter, a flower pot on a sill or a button beside a door are smaller than a
+     * voxel or purely decorative, so they never appear in the scene and no iteration inside three.js can invent
+     * them. They are chosen last, on real coordinates, against the placed blocks.</p>
+     *
+     * @param prompt  the original request
+     * @param best    the version that was placed
+     * @param outcome the placement result (gives the world bounds and the placed model)
+     * @param mode    the thinking mode
+     * @return the applied decorations, or {@code null} when the pass was skipped or failed
+     */
+    private DetailingResult detailAfterPlacement(String prompt, Version best, PlaceOutcome outcome, BuildMode mode) {
+        if (cancelled.get()) return null;
+        VoxelModel placed = SceneGeometry.build(best.spec());
+        if (placed == null || placed.isEmpty()) return null;
+        try {
+            status = "Доработка мелкими блоками…";
+            progress = 0.93;
+
+            int[] placeBounds = placed.bounds();
+            String placedText = "placed structure bounds: x " + placeBounds[0] + ".." + placeBounds[3]
+                    + ", y " + placeBounds[1] + ".." + placeBounds[4]
+                    + ", z " + placeBounds[2] + ".." + placeBounds[5]
+                    + " (" + (placeBounds[3] - placeBounds[0] + 1) + "x" + (placeBounds[4] - placeBounds[1] + 1)
+                    + "x" + (placeBounds[5] - placeBounds[2] + 1) + " blocks)\n"
+                    + "palette: " + best.spec().palette() + "\n"
+                    + "the door faces south; the ground level is y=" + placeBounds[1];
+
+            // renders of the placed structure, so the model sees what it is decorating
+            Render render = renderViews(best.spec(), 99);
+            List<byte[]> pictures = render.ok() ? render.pngs() : List.of();
+            List<String> viewNames = render.ok() ? render.viewNames() : List.of();
+
+            List<ChatMessage> messages = new ArrayList<>();
+            messages.add(ChatMessage.system(ScenePrompts.system()));
+            messages.add(ChatMessage.user(ScenePlan.detailing(prompt, planJson, placedText,
+                    "(the structure is complete; judge only where small decorations belong)", viewNames), pictures));
+
+            ChatResult result;
+            try {
+                result = chat(new ChatRequest(config.model, messages, mode.maxTokens, config.temperature,
+                        effort(mode.effortEdit, "medium"), true));
+            } catch (LlmException e) {
+                if (e.isCancellation() || cancelled.get()) return null;
+                plugin.getLogger().warning("detailing call failed: " + shortError(e));
+                return null;
+            }
+            JsonObject json = extractObject(result.content());
+            List<String> errors = new ArrayList<>();
+            List<SceneDetailing.Decor> proposed = SceneDetailing.parse(json, errors);
+            if (proposed.isEmpty()) {
+                plugin.getLogger().info("detailing: nothing usable (" + String.join("; ", errors) + ")");
+                return null;
+            }
+            List<SceneDetailing.Decor> accepted = SceneDetailing.filter(proposed, placed,
+                    id -> {
+                        try {
+                            org.bukkit.Material m = org.bukkit.Material.matchMaterial(id);
+                            return m != null && m.isBlock();
+                        } catch (RuntimeException e) {
+                            return false;
+                        }
+                    }, errors);
+            if (!errors.isEmpty()) {
+                plugin.getLogger().info("detailing: " + errors.size() + " rejected (" 
+                        + clip(String.join("; ", errors), 400) + ")");
+            }
+            if (accepted.isEmpty()) return null;
+            if (cancelled.get()) return null;
+
+            // place them through the same point-placement path the placer uses for single blocks
+            int applied = 0;
+            World world = worldForActor();
+            if (world == null) return null;
+            for (SceneDetailing.Decor d : accepted) {
+                if (cancelled.get()) break;
+                try {
+                    BlockSpec spec = BlockSpec.parseRaw(d.block());
+                    org.bukkit.block.Block block = world.getBlockAt(d.x(), d.y(), d.z());
+                    var data = org.bukkit.Bukkit.createBlockData(spec.name());
+                    block.setBlockData(data, false);
+                    applied++;
+                } catch (RuntimeException e) {
+                    plugin.getLogger().fine("detailing: could not place " + d.block() + " at "
+                            + d.x() + "," + d.y() + "," + d.z() + ": " + e.getMessage());
+                }
+            }
+            if (applied == 0) return null;
+            plugin.getLogger().info("detailing: placed " + applied + " of " + proposed.size()
+                    + " (rejected " + errors.size() + ")");
+            return new DetailingResult(accepted.subList(0, Math.min(applied, accepted.size())),
+                    SceneDetailing.describe(accepted.subList(0, Math.min(applied, accepted.size()))));
+        } catch (Throwable t) {
+            plugin.getLogger().log(Level.WARNING, "detailing pass failed", t);
+            return null;
+        }
+    }
+
     // ------------------------------------------------------------------ 1. design
 
     /**
-     * Asks for the first scene, retrying a malformed answer with the parse error.
+     * Designs the build the way an architect does: a full brief first, then the scene stage by stage.
      *
-     * @return the parsed scene, or {@code null} when every attempt failed
+     * <p>The first version of this pipeline asked for the whole building in one answer and produced mediocre
+     * results: the model never decided dimensions, floors or the detail list, and one answer has to spread its
+     * attention over everything. This method mirrors the block pipeline: {@link ScenePlan#plan} produces a brief
+     * with exact sizes, floors with rooms, palette roles, at least 25 located details and an ordered stage
+     * schedule; then {@link #buildStage} builds each stage in its own call, seeing the renders of what already
+     * stands.</p>
+     *
+     * @param prompt the user request
+     * @param mode   the thinking mode (effort and token budget)
+     * @return the scene, or {@code null} when the plan itself could not be produced
      */
     private SceneSpec design(String prompt, BuildMode mode) throws Exception {
+        JsonObject plan = makePlan(prompt, mode);
+        if (plan == null) {
+            return null;
+        }
+        planJson = plan.toString();
+        plugin.getLogger().info("scene plan: " + planText(plan, "title") + ", body "
+                + bodySize(plan) + ", stages " + stageCount(plan) + ", details " + detailCount(plan));
+
+        List<JsonObject> stages = stages(plan);
+        if (stages.isEmpty()) {
+            // no schedule: fall back to a single shot, better than nothing
+            return designOneShot(prompt, mode);
+        }
+
+        SceneSpec spec = SceneSpec.of(planText(plan, "title"), List.of()).withPalette(paletteFrom(plan));
+        int total = stages.size();
+        int built = 0;
+        for (int i = 0; i < total; i++) {
+            if (cancelled.get()) throw new CancelledException();
+            JsonObject stage = stages.get(i);
+            String name = planText(stage, "name");
+            String goal = planText(stage, "goal");
+            progress = 0.02 + 0.20 * (i + 1) / total;
+            status = "Строю " + (i + 1) + "/" + total + ": " + name;
+            say("<gray>этап <white><v0>/<v1></white>: <v2></gray>", i + 1, total, name);
+
+            SceneSpec next = buildStage(prompt, plan, i, total, name, goal, spec, mode);
+            if (next == null) {
+                plugin.getLogger().warning("stage " + (i + 1) + "/" + total + " (" + name + ") produced nothing, skipping");
+                say("<gray>этап <v0> не дал объектов, пропускаю</gray>", name);
+                continue;
+            }
+            spec = next;
+            built++;
+            plugin.getLogger().info("stage " + (i + 1) + "/" + total + " (" + name + "): "
+                    + spec.objects().size() + " objects total");
+        }
+        if (built == 0 || spec.objects().isEmpty()) {
+            plugin.getLogger().warning("every stage failed, falling back to a one-shot design");
+            return designOneShot(prompt, mode);
+        }
+        spec = ensureRoof(spec, plan);
+        say("<gray>Сцена собрана по плану: <white><v0></white> объектов, размер <white><v1></white>. "
+                + "Начинаю итерации с рендерами.</gray>",
+                spec.objects().size(), spec.bounds()[2][0] + "×" + spec.bounds()[2][1] + "×" + spec.bounds()[2][2]);
+        return spec;
+    }
+
+    /**
+     * Produces the design brief.
+     *
+     * @return the parsed brief, or {@code null} when every attempt failed
+     */
+    private JsonObject makePlan(String prompt, BuildMode mode) throws Exception {
+        int[] asked = SceneAnalysis.parseRequestedSize(prompt);
+        String hint = asked == null ? null : "The request names the size " + asked[0] + "x" + asked[1]
+                + ": the body MUST be exactly that.";
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(ChatMessage.system(ScenePrompts.system()));
-        messages.add(ChatMessage.user(ScenePrompts.initial(prompt)));
+        messages.add(ChatMessage.user(ScenePlan.plan(prompt, hint)));
         String problem = null;
         for (int attempt = 1; attempt <= DESIGN_ATTEMPTS; attempt++) {
             if (cancelled.get()) throw new CancelledException();
-            status = attempt == 1 ? "Проектирование сцены…" : "Повтор проектирования (" + attempt + "/" + DESIGN_ATTEMPTS + ")…";
+            status = attempt == 1 ? "Планирую постройку…" : "Повтор плана (" + attempt + "/" + DESIGN_ATTEMPTS + ")…";
             ChatResult result;
             try {
                 result = chat(new ChatRequest(config.model, messages, mode.maxTokens, config.temperature,
@@ -449,48 +654,326 @@ public final class SceneBuildJob {
             } catch (LlmException e) {
                 if (e.isCancellation() || cancelled.get()) throw new CancelledException();
                 problem = shortError(e);
-                plugin.getLogger().warning("scene design call failed (attempt " + attempt + "): " + problem);
+                plugin.getLogger().warning("scene plan call failed (attempt " + attempt + "): " + problem);
                 if (attempt >= DESIGN_ATTEMPTS) break;
-                messages.add(ChatMessage.user("Your previous answer was lost to a transport error ("
-                        + problem + "). Return the JSON scene again, concise."));
+                messages.add(ChatMessage.user(ScenePrompts.repair("transport error: " + problem)));
                 continue;
             }
-            if (cancelled.get()) throw new CancelledException();
-            String content = result.content();
-            JsonObject json = null;
-            try {
-                JsonElement value = Json.extract(content).value();
-                if (value.isJsonObject()) json = value.getAsJsonObject();
-                else problem = "the answer is not a JSON object";
-            } catch (RuntimeException e) {
-                problem = "invalid JSON: " + e.getMessage();
+            JsonObject json = extractObject(result.content());
+            if (json != null && json.has("stages")) {
+                return json;
             }
-            if (json != null) {
-                JsonElement wrapped = json.get("spec");
-                if (wrapped != null && wrapped.isJsonObject() && !json.has("objects")) {
-                    json = wrapped.getAsJsonObject();
-                }
-                try {
-                    SceneSpec spec = SceneSpec.parse(json);
-                    if (spec.objects().isEmpty()) {
-                        problem = "the scene has no valid objects (" + String.join("; ", spec.errors()) + ")";
-                    } else if (!spec.errors().isEmpty()) {
-                        problem = "these objects are invalid: " + String.join("; ", spec.errors());
-                    } else {
-                        plugin.getLogger().info("scene designed: " + spec.objects().size() + " objects, "
-                                + spec.bounds()[2][0] + "x" + spec.bounds()[2][1] + "x" + spec.bounds()[2][2]);
-                        return spec;
-                    }
-                } catch (RuntimeException e) {
-                    problem = e.getMessage();
-                }
-            }
+            problem = json == null ? "the answer is not a JSON object" : "the brief has no stages";
             if (attempt >= DESIGN_ATTEMPTS) break;
-            plugin.getLogger().warning("scene design attempt " + attempt + " rejected: " + problem);
-            messages.add(ChatMessage.assistant(clip(content, 3000)));
-            messages.add(ChatMessage.user(ScenePrompts.repair(problem == null ? "unknown problem" : problem)));
+            plugin.getLogger().warning("scene plan attempt " + attempt + " rejected: " + problem);
+            messages.add(ChatMessage.assistant(clip(result.content(), 3000)));
+            messages.add(ChatMessage.user(ScenePrompts.repair(problem)));
         }
         return null;
+    }
+
+    /**
+     * Guarantees the building has one closed roof.
+     *
+     * <p>Live runs kept producing "roofs" made of separate beams with gaps between them: the model reads the
+     * brief, then builds the roof as a dozen {@code beam} objects laid along the slope. Words in the prompt did
+     * not fix it, because the model believes a bundle of beams is a roof. So the code enforces the invariant
+     * that matters: if no single {@code prism} covers the body footprint, one is added on top of the walls before
+     * anything is rendered or critiqued. The model keeps its beams as decoration on top of a real roof, and the
+     * building can no longer end up with holes.</p>
+     *
+     * @param spec the scene built from the stages
+     * @param plan the brief (supplies the roof material role and the body size)
+     * @return a scene that definitely has a roof covering the body
+     */
+    private SceneSpec ensureRoof(SceneSpec spec, JsonObject plan) {
+        try {
+            int[] body = bodyBox(spec.objects());
+            if (body == null) return spec;
+            // does an existing prism already cover the body footprint?
+            for (SceneObject o : spec.objects()) {
+                if (!o.type().equals("prism")) continue;
+                int[] from = o.from();
+                int[] to = o.to();
+                if (from == null || to == null) continue;
+                boolean covers = from[0] <= body[0] + 1 && to[0] >= body[1] - 1
+                        && from[2] <= body[2] + 1 && to[2] >= body[3] - 1;
+                if (covers) return spec;
+            }
+            // no covering prism: add one on top of the walls
+            int topY = body[4];
+            JsonObject roof = new JsonObject();
+            roof.addProperty("id", "roof_guaranteed");
+            roof.addProperty("type", "prism");
+            JsonArray from = new JsonArray();
+            from.add(body[0] - 1);
+            from.add(topY);
+            from.add(body[2] - 1);
+            JsonArray to = new JsonArray();
+            to.add(body[1] + 1);
+            to.add(topY);
+            to.add(body[3] + 1);
+            roof.add("from", from);
+            roof.add("to", to);
+            roof.addProperty("style", "gable");
+            roof.addProperty("ridge", (body[1] - body[0]) >= (body[3] - body[2]) ? "x" : "z");
+            roof.addProperty("overhang", 1);
+            roof.addProperty("pitch", 1.0);
+            roof.addProperty("material", roofMaterial(plan, spec));
+            plugin.getLogger().info("no closed roof found: adding a guaranteed gable prism over the body "
+                    + "(" + (body[1] - body[0] + 1) + "x" + (body[3] - body[2] + 1) + " at y=" + topY + ")");
+            List<JsonObject> all = new ArrayList<>();
+            for (SceneObject o : spec.objects()) all.add(o.toJson());
+            all.add(roof);
+            JsonObject merged = spec.toJson();
+            JsonArray arr = new JsonArray();
+            for (JsonObject o : all) arr.add(o);
+            merged.add("objects", arr);
+            SceneSpec parsed = SceneSpec.parse(merged);
+            return parsed.objects().isEmpty() ? spec : parsed;
+        } catch (RuntimeException e) {
+            plugin.getLogger().log(Level.WARNING, "ensureRoof failed, keeping the scene as is", e);
+            return spec;
+        }
+    }
+
+    /**
+     * @return the palette key to use for a guaranteed roof: the brief's roof role when it exists in the palette,
+     *         otherwise any existing key that looks like a roof, otherwise "roof"
+     */
+    private static String roofMaterial(JsonObject plan, SceneSpec spec) {
+        Map<String, String> palette = spec.palette();
+        JsonElement pe = plan == null ? null : plan.get("palette");
+        if (pe != null && pe.isJsonObject()) {
+            JsonElement r = pe.getAsJsonObject().get("roof");
+            if (r != null && r.isJsonPrimitive()) {
+                String value = r.getAsString();
+                // the brief names a material role; reuse the key when the stage palette has it
+                if (palette.containsKey(value)) return value;
+            }
+        }
+        for (String key : palette.keySet()) {
+            String k = key.toLowerCase(Locale.ROOT);
+            if (k.contains("roof") || k.contains("tile") || k.contains("shingle")) return key;
+        }
+        return "roof";
+    }
+
+    /**
+     * @return {@code {minX, maxX, minZ, maxZ, topY}} of the largest wall object, or {@code null}
+     */
+    private static int[] bodyBox(List<SceneObject> objects) {
+        int bestArea = 0;
+        int[] best = null;
+        for (SceneObject o : objects) {
+            if (!o.type().equals("box")) continue;
+            int[] from = o.from();
+            int[] to = o.to();
+            if (from == null || to == null) continue;
+            int area = (to[0] - from[0] + 1) * (to[2] - from[2] + 1);
+            if (area > bestArea) {
+                bestArea = area;
+                best = new int[]{from[0], to[0], from[2], to[2], to[1]};
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Builds one stage and merges its objects into the scene.
+     *
+     * @return the extended scene, or {@code null} when the stage produced nothing usable
+     */
+    private SceneSpec buildStage(String prompt, JsonObject plan, int index, int total, String name, String goal,
+                                 SceneSpec current, BuildMode mode) throws Exception {
+        Render render = renderViews(current, index + 1);
+        List<byte[]> pictures = render.ok() ? render.pngs() : List.of();
+        List<String> viewNames = render.ok() ? render.viewNames() : List.of();
+        String existing = current.objects().isEmpty() ? "(nothing yet)" : current.digest(80);
+
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(ChatMessage.system(ScenePrompts.system()));
+        String stagePrompt = ScenePlan.stage(prompt, plan.toString(), index + 1, total, name, goal,
+                existing, viewNames);
+        messages.add(ChatMessage.user(stagePrompt, pictures));
+
+        String problem = null;
+        for (int attempt = 1; attempt <= DESIGN_ATTEMPTS; attempt++) {
+            if (cancelled.get()) throw new CancelledException();
+            ChatResult result;
+            try {
+                result = chat(new ChatRequest(config.model, messages, mode.maxTokens, config.temperature,
+                        effort(mode.effortBuild, "medium"), true));
+            } catch (LlmException e) {
+                if (e.isCancellation() || cancelled.get()) throw new CancelledException();
+                problem = shortError(e);
+                if (attempt >= DESIGN_ATTEMPTS) return null;
+                messages.add(ChatMessage.user(ScenePrompts.repair("transport error: " + problem)));
+                continue;
+            }
+            JsonObject json = extractObject(result.content());
+            if (json == null) {
+                problem = "the answer is not a JSON object";
+            } else {
+                JsonElement objects = json.get("objects");
+                if (objects == null || !objects.isJsonArray() || objects.getAsJsonArray().isEmpty()) {
+                    problem = "the answer has no objects array";
+                } else {
+                    SceneSpec merged = mergeObjects(current, objects.getAsJsonArray(), "s" + (index + 1));
+                    if (merged != null) {
+                        String notes = planText(json, "notes");
+                        if (!notes.isBlank() && actor != null) {
+                            plugin.getLogger().info("stage " + (index + 1) + "/" + total + " notes: " + clip(notes, 200));
+                        }
+                        return merged;
+                    }
+                    problem = "the stage objects are invalid";
+                }
+            }
+            if (attempt >= DESIGN_ATTEMPTS) return null;
+            messages.add(ChatMessage.assistant(clip(result.content(), 3000)));
+            messages.add(ChatMessage.user(ScenePrompts.repair(problem)));
+        }
+        return null;
+    }
+
+    /**
+     * Merges a stage's objects into the scene, prefixing ids so two stages cannot collide.
+     *
+     * @return the merged scene, or {@code null} when nothing survived validation
+     */
+    private SceneSpec mergeObjects(SceneSpec current, JsonArray objects, String prefix) {
+        List<JsonObject> accepted = new ArrayList<>();
+        for (JsonElement e : objects) {
+            if (!e.isJsonObject()) continue;
+            JsonObject o = e.getAsJsonObject().deepCopy();
+            String id = SceneObject.str(o, "id");
+            if (id.isBlank()) {
+                id = prefix + "_" + (accepted.size() + 1);
+            } else if (!id.startsWith(prefix + "_") && !id.startsWith(prefix)) {
+                id = prefix + "_" + id;
+            }
+            o.addProperty("id", id);
+            accepted.add(o);
+        }
+        if (accepted.isEmpty()) return null;
+        // validate by round-tripping through the spec parser: bad objects are dropped, not fatal
+        List<JsonObject> all = new ArrayList<>();
+        for (SceneObject o : current.objects()) all.add(o.toJson());
+        all.addAll(accepted);
+        JsonObject merged = current.toJson();
+        JsonArray arr = new JsonArray();
+        for (JsonObject o : all) arr.add(o);
+        merged.add("objects", arr);
+        SceneSpec parsed = SceneSpec.parse(merged);
+        if (parsed.objects().isEmpty()) return null;
+        if (!parsed.errors().isEmpty()) {
+            plugin.getLogger().info("stage merge dropped " + parsed.errors().size() + " invalid object(s): "
+                    + clip(String.join("; ", parsed.errors()), 300));
+        }
+        return parsed;
+    }
+
+    /**
+     * Single-shot design, used only when the brief or every stage failed.
+     *
+     * @return the scene, or {@code null}
+     */
+    private SceneSpec designOneShot(String prompt, BuildMode mode) throws Exception {
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(ChatMessage.system(ScenePrompts.system()));
+        messages.add(ChatMessage.user(ScenePrompts.initial(prompt)));
+        for (int attempt = 1; attempt <= DESIGN_ATTEMPTS; attempt++) {
+            if (cancelled.get()) throw new CancelledException();
+            ChatResult result;
+            try {
+                result = chat(new ChatRequest(config.model, messages, mode.maxTokens, config.temperature,
+                        effort(mode.effortPlan, "medium"), true));
+            } catch (LlmException e) {
+                if (e.isCancellation() || cancelled.get()) throw new CancelledException();
+                if (attempt >= DESIGN_ATTEMPTS) return null;
+                messages.add(ChatMessage.user(ScenePrompts.repair(shortError(e))));
+                continue;
+            }
+            JsonObject json = extractObject(result.content());
+            if (json != null) {
+                try {
+                    SceneSpec spec = SceneSpec.parse(json);
+                    if (!spec.objects().isEmpty()) return spec;
+                } catch (RuntimeException ignored) {
+                    // fall through to the repair message
+                }
+            }
+            if (attempt >= DESIGN_ATTEMPTS) return null;
+            messages.add(ChatMessage.assistant(clip(result.content(), 3000)));
+            messages.add(ChatMessage.user(ScenePrompts.repair("invalid scene")));
+        }
+        return null;
+    }
+
+    /**
+     * Extracts the first JSON object from a model answer.
+     *
+     * @param content the raw answer
+     * @return the object, or {@code null}
+     */
+    private static JsonObject extractObject(String content) {
+        try {
+            JsonElement value = Json.extract(content).value();
+            if (value.isJsonObject()) return value.getAsJsonObject();
+        } catch (RuntimeException ignored) {
+            // not JSON at all
+        }
+        return null;
+    }
+
+    /** @return the stages of a brief, in order */
+    private static List<JsonObject> stages(JsonObject plan) {
+        JsonElement e = plan.get("stages");
+        List<JsonObject> out = new ArrayList<>();
+        if (e == null || !e.isJsonArray()) return out;
+        for (JsonElement s : e.getAsJsonArray()) {
+            if (s.isJsonObject()) out.add(s.getAsJsonObject());
+        }
+        return out;
+    }
+
+    /** @return a string field of a plan fragment, or "" */
+    private static String planText(JsonObject o, String key) {
+        JsonElement e = o.get(key);
+        return e != null && e.isJsonPrimitive() ? e.getAsString() : "";
+    }
+
+    /** @return "WxD" from the brief's body, or "?" */
+    private static String bodySize(JsonObject plan) {
+        JsonElement e = plan.get("body");
+        if (e == null || !e.isJsonObject()) return "?";
+        JsonObject b = e.getAsJsonObject();
+        return SceneObject.num(b, "x", 0) + "x" + SceneObject.num(b, "z", 0);
+    }
+
+    /** @return the number of stages in the brief */
+    private static int stageCount(JsonObject plan) {
+        return stages(plan).size();
+    }
+
+    /** @return the number of details listed in the brief */
+    private static int detailCount(JsonObject plan) {
+        JsonElement e = plan.get("details");
+        return e != null && e.isJsonArray() ? e.getAsJsonArray().size() : 0;
+    }
+
+    /** @return the palette from the brief, mapped to hex colours where possible */
+    private static Map<String, String> paletteFrom(JsonObject plan) {
+        Map<String, String> out = new LinkedHashMap<>();
+        JsonElement e = plan.get("palette");
+        if (e == null || !e.isJsonObject()) return out;
+        for (Map.Entry<String, JsonElement> entry : e.getAsJsonObject().entrySet()) {
+            if (!entry.getValue().isJsonPrimitive()) continue;
+            String value = entry.getValue().getAsString();
+            if (value.startsWith("#")) out.put(entry.getKey(), value);
+        }
+        return out;
     }
 
     // ------------------------------------------------------------------ 2. render
