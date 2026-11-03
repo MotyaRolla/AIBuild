@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import dev.aibuild.ai.ChatMessage;
+import dev.aibuild.ai.StreamListener;
 import dev.aibuild.ai.ChatRequest;
 import dev.aibuild.ai.ChatResult;
 import dev.aibuild.ai.LlmClient;
@@ -25,6 +26,11 @@ import dev.aibuild.model.ShapeResolver;
 import dev.aibuild.model.VoxelModel;
 import dev.aibuild.model.ops.OpExecutor;
 import dev.aibuild.model.ops.OpResult;
+import dev.aibuild.render.ContactSheet;
+import dev.aibuild.script.ScriptLint;
+import dev.aibuild.script.ScriptPatch;
+import dev.aibuild.script.ScriptResult;
+import dev.aibuild.script.ScriptRuntime;
 import dev.aibuild.util.Json;
 import dev.aibuild.util.Msg;
 import dev.aibuild.world.PlacementMath;
@@ -43,6 +49,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.function.Consumer;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -219,15 +226,552 @@ public final class BuildPipeline {
     private void runCreate(Job job, Build build, String prompt, Anchor anchor, boolean isRebuild) throws Exception {
         PluginConfig c = cfg.get();
         Transcript tr = new Transcript(build.id, c.saveTranscripts);
-        Staged st = c.createStrategy.equals("compiled")
-                ? designAndCompile(job, tr, prompt, build, anchor, isRebuild)
-                : designAndStage(job, tr, prompt, build, anchor, isRebuild);
-        OpExecutor exec = new OpExecutor(info).withLimits(st.limits);
-        String strategy = c.reviewStrategy;
-        int cap = "adaptive".equals(strategy) ? c.adaptiveMaxRounds : job.mode.verifyRounds;
-        Verdict v = verify(job, tr, exec, st.model, st.plan, st.planText, prompt, null, Checklist.forCreate(st.plan),
-                strategy, cap, 0.68);
+        Staged st = switch (c.createStrategy) {
+            case "script" -> designAndScript(job, tr, prompt, build, anchor, isRebuild);
+            case "compiled" -> designAndCompile(job, tr, prompt, build, anchor, isRebuild);
+            default -> designAndStage(job, tr, prompt, build, anchor, isRebuild);
+        };
+        Verdict v;
+        if (job.script != null) {
+            v = verifyScript(job, tr, build, st, prompt);
+        } else {
+            OpExecutor exec = new OpExecutor(info).withLimits(st.limits);
+            String strategy = c.reviewStrategy;
+            int cap = "adaptive".equals(strategy) ? c.adaptiveMaxRounds : job.mode.verifyRounds;
+            v = verify(job, tr, exec, st.model, st.plan, st.planText, prompt, null, Checklist.forCreate(st.plan),
+                    strategy, cap, 0.68);
+        }
         commit(job, build, st.model, isRebuild ? "Пересоздано: " + prompt : prompt, v, tr);
+    }
+
+    /**
+     * Script strategy: the model writes one JavaScript build program, the sandboxed runtime executes it, and
+     * failures go back to the model as a traceback (up to {@code script.repair-attempts} calls). The plot is
+     * derived from what the script actually built. Falls back to the JSON-op program when the script cannot be
+     * repaired and {@code script.fallback-to-ops} is on.
+     */
+    private Staged designAndScript(Job job, Transcript tr, String prompt, Build build, Anchor anchor,
+                                   boolean isRebuild) throws Exception {
+        PluginConfig c = cfg.get();
+        job.status("ИИ пишет программу постройки…", 0.02);
+        int ext = c.maxExtent;
+        int[] safety = {-ext, -32, -ext, ext, Math.min(320, ext * 2), ext};
+        ScriptRuntime runtime = new ScriptRuntime(info);
+        ScriptRuntime.Budget budget = BuildMode.EXTRA.equals(job.mode.id) ? ScriptRuntime.Budget.extra() : ScriptRuntime.Budget.standard();
+        long seed = build == null ? 1L : build.id.hashCode();
+        int n = Math.max(1, c.scriptCandidates(job.mode.id));
+        List<Future<ScriptCandidate>> futures = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            long candidateSeed = seed + i * 7919L;
+            String tag = n == 1 ? "script" : "script-c" + (i + 1);
+            Consumer<ScriptResult> show = i == 0 ? streamingPreview(job, build, anchor) : null;
+            futures.add(side.submit(() -> writeScript(job, tr, prompt, candidateSeed, tag, runtime, budget, safety, show)));
+        }
+        if (n > 1) say(job, "<gray>ИИ пишет <v0> независимых варианта программы, лучший выберет проверка.</gray>", n);
+        List<ScriptCandidate> ok = new ArrayList<>();
+        Exception failure = null;
+        for (Future<ScriptCandidate> f : futures) {
+            try {
+                ScriptCandidate cand = await(f, job);
+                if (cand != null) ok.add(cand);
+            } catch (CancelledException e) {
+                throw e;
+            } catch (Exception e) {
+                // one failed candidate (network, budget) must not sink the others
+                plugin.getLogger().log(Level.WARNING, "script candidate failed", e);
+                failure = e;
+            }
+        }
+        if (ok.isEmpty() && failure != null && !c.scriptFallback) throw failure;
+        if (ok.isEmpty()) {
+            if (c.scriptFallback) {
+                say(job, "<yellow>Программа не заработала, строим классическим способом.</yellow>");
+                return designAndCompile(job, tr, prompt, build, anchor, isRebuild);
+            }
+            throw new IllegalStateException("программа постройки не выполнилась");
+        }
+        ScriptCandidate best = pickCandidate(job, tr, prompt, ok);
+        ScriptResult result = best.result();
+        String source = best.source();
+        seed = best.seed();
+        VoxelModel model = result.model();
+        JsonObject plan = planFromScript(result, prompt);
+        int[] plot = plotBounds(plan);
+        sync(() -> {
+            if (build != null) {
+                build.name = Json.str(plan, "title", "Постройка");
+                build.plan = plan;
+                if (build.originalPrompt == null || isRebuild) build.originalPrompt = prompt;
+                if (anchor != null && build.versions.isEmpty() && (!build.placed || job.liveAnchored)) {
+                    // re-anchor on the real plot; keep the ground height measured before any preview blocks stood
+                    int gy = build.originY;
+                    place(build, anchor, plot);
+                    if (job.liveAnchored && anchor.y() == null) build.originY = gy;
+                }
+                store.save(build);
+            }
+            return null;
+        });
+        job.plotLimits = new int[]{plot[0] - 3, plot[1] - 2, plot[2] - 3, plot[3] + 3, plot[4] + 2, plot[5] + 3};
+        job.script = source;
+        job.scriptSeed = seed;
+        job.scriptParts = result.partTable(30);
+        job.smoothed = result.smoothed();
+        job.doorways.addAll(result.doorways());
+        tr.note("script result", "parts:\n" + result.partTable(40) + "\nresolver: " + postProcess(job, model));
+        job.scriptModel = model.copy();
+        livePreview(build, model);
+        say(job, "<gray>Программа выполнена: <white><v0></white>, <v1> блоков, частей: <v2>. Проверяем постройку.</gray>",
+                Json.str(plan, "title", "Постройка"), model.nonAirCount(), result.parts().size());
+        Staged st = new Staged();
+        st.plan = plan;
+        st.planText = Json.GSON.toJson(planForPrompt(plan)) + "\nPARTS (from the build script):\n" + result.partTable(30);
+        st.model = model;
+        st.limits = job.plotLimits;
+        return st;
+    }
+
+    /** A script that ran successfully, with its brief and analysis. */
+    private record ScriptCandidate(String source, ScriptResult result, long seed, JsonObject plan, AnalysisReport report) {
+        int defects() {
+            return report.count(dev.aibuild.analysis.Severity.CRITICAL) * 10 + report.count(dev.aibuild.analysis.Severity.MAJOR);
+        }
+    }
+
+    /** Writes and runs one script, feeding failures back as tracebacks; null when it never runs. */
+    private ScriptCandidate writeScript(Job job, Transcript tr, String prompt, long seed, String tag, ScriptRuntime runtime,
+                                        ScriptRuntime.Budget budget, int[] safety, Consumer<ScriptResult> show) throws Exception {
+        PluginConfig c = cfg.get();
+        List<ChatMessage> msgs = new ArrayList<>();
+        msgs.add(ChatMessage.system(ScriptPrompts.system(c.includeBlockList ? blockList.get() : null)));
+        msgs.add(ChatMessage.user(ScriptPrompts.create(prompt, scaleHint(job.mode))));
+        for (int attempt = 0; attempt <= c.scriptRepairAttempts; attempt++) {
+            LiveScript live = show == null ? null : new LiveScript(runtime, seed, safety, budget, job.cancelled, side,
+                    partial -> {
+                        prepare(partial);
+                        show.accept(partial);
+                    },
+                    part -> job.status("ИИ пишет часть «" + clip(part, 40) + "»…", job.progress));
+            String answer;
+            try {
+                answer = callText(job, tr, attempt == 0 ? tag : tag + "-repair" + attempt, job.mode.effortBuild, msgs, live);
+            } finally {
+                if (live != null) live.close();
+            }
+            String source = ScriptLint.extract(answer);
+            job.status("Выполнение программы постройки…", 0.05 + attempt * 0.02);
+            ScriptResult result = runtime.run(source, seed, null, safety, budget, job.cancelled);
+            tr.note(tag + "-run-" + attempt, "ok=" + result.ok() + " blocks=" + result.model().nonAirCount() + " ms=" + result.elapsedMs()
+                    + " instructions=" + result.instructions() + "\nwarnings: " + result.warnings() + "\nlogs: " + result.logs()
+                    + (result.ok() ? "\nparts:\n" + result.partTable(40) : "\n" + result.error().describe()));
+            tr.note(tag + "-" + attempt + ".js", source);
+            if (result.ok()) {
+                prepare(result);
+                if (show != null) show.accept(result);
+                JsonObject plan = planFromScript(result, prompt);
+                return new ScriptCandidate(source, result, seed, plan,
+                        StructureAnalyzer.analyze(result.model(), info, analyzerOptions(plan)));
+            }
+            checkCancelled(job);
+            plugin.getLogger().info("[" + tag + "] attempt " + attempt + " failed: " + result.error().message());
+            if (attempt < c.scriptRepairAttempts) {
+                say(job, "<gray>Программа остановилась: <white><v0></white>. ИИ исправляет…</gray>", clip(result.error().message(), 160));
+                msgs.add(ChatMessage.assistant("```js\n" + source + "```"));
+                msgs.add(ChatMessage.user(ScriptPrompts.repair(result.error(), attempt + 1)));
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Shows a prepared script result in the world while candidates are still being written (null when there is no
+     * world build or live preview is off). The first preview positions the build; later ones only replace blocks.
+     */
+    private Consumer<ScriptResult> streamingPreview(Job job, Build build, Anchor anchor) {
+        if (build == null || !cfg.get().livePreview) return null;
+        return result -> {
+            VoxelModel m = result.model().copy();
+            try {
+                if (!job.liveAnchored) {
+                    int[] plot = livePlot(m);
+                    sync(() -> {
+                        if (anchor != null && !build.placed && build.versions.isEmpty()) {
+                            place(build, anchor, plot);
+                            job.liveAnchored = true;
+                        }
+                        return null;
+                    });
+                }
+                if (build.placed || job.liveAnchored) livePreview(build, m);
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.FINE, "streaming preview failed", e);
+            }
+        };
+    }
+
+    /**
+     * Plot for positioning a build from its first streamed parts. Scripts usually build around x = z = 0 and
+     * grow outwards, so the front edge is mirrored from the back and padded; the final plot re-anchors anyway.
+     */
+    static int[] livePlot(VoxelModel m) {
+        int[] b = m.solidBounds();
+        if (b == null) return new int[]{-4, 0, -4, 4, 8, 4};
+        int front = Math.max(b[5], -b[2]) + 3;
+        return new int[]{b[0], b[1], b[2], b[3], b[4], front};
+    }
+
+    /** Deterministic post-processing of a script result in place (doorways, orientation, connections). */
+    private void prepare(ScriptResult result) {
+        VoxelModel m = result.model();
+        for (var d : result.doorways()) d.restore(m, info);
+        if (cfg.get().autoOrient) dev.aibuild.model.OrientationFixer.fix(m, info, result.smoothed());
+        ShapeResolver.resolve(m, info);
+    }
+
+    /** Fewest analyzer defects first; among equals, the vision judge decides when the gateway delivers images. */
+    private ScriptCandidate pickCandidate(Job job, Transcript tr, String prompt, List<ScriptCandidate> list) throws Exception {
+        List<ScriptCandidate> sorted = new ArrayList<>(list);
+        sorted.sort(java.util.Comparator.comparingInt(ScriptCandidate::defects));
+        int minCritical = sorted.getFirst().report().count(dev.aibuild.analysis.Severity.CRITICAL);
+        sorted.removeIf(cand -> cand.report().count(dev.aibuild.analysis.Severity.CRITICAL) > minCritical);
+        StringBuilder log = new StringBuilder();
+        for (ScriptCandidate cand : list) {
+            log.append("seed ").append(cand.seed()).append(": blocks=").append(cand.result().model().nonAirCount())
+                    .append(" defects=").append(cand.defects()).append(" parts=").append(cand.result().parts().size()).append('\n');
+        }
+        ScriptCandidate best = sorted.getFirst();
+        if (sorted.size() > 1 && cfg.get().visionJudge && vision(job, tr)) {
+            job.status("Сравнение вариантов по изображениям…", 0.4);
+            for (int i = 1; i < sorted.size(); i++) {
+                ScriptCandidate other = sorted.get(i);
+                int pref = judge(job, tr, prompt, sheet(best.result().model()), sheet(other.result().model()));
+                log.append("judge seed ").append(best.seed()).append(" vs ").append(other.seed()).append(": ").append(pref).append('\n');
+                if (pref > 0) best = other;
+            }
+        }
+        tr.note("candidates", log + "chosen seed " + best.seed());
+        if (list.size() > 1) {
+            say(job, "<gray>Выбран вариант <v0> из <v1>.</gray>", list.indexOf(best) + 1, list.size());
+        }
+        return best;
+    }
+
+    // =================================================================== build scripts: vision and critic
+
+    private final java.util.concurrent.atomic.AtomicReference<Boolean> visionOk = new java.util.concurrent.atomic.AtomicReference<>();
+
+    /** Whether images reach the model: checked once per session with a rendered random number. */
+    private boolean vision(Job job, Transcript tr) {
+        PluginConfig c = cfg.get();
+        if (!c.visionEnabled) return false;
+        Boolean known = visionOk.get();
+        if (known != null) return known;
+        synchronized (visionOk) {
+            if (visionOk.get() != null) return visionOk.get();
+            String digits = String.valueOf(100 + java.util.concurrent.ThreadLocalRandom.current().nextInt(900));
+            boolean ok;
+            try {
+                String answer = callRaw(job, tr, "vision-probe", List.of(ChatMessage.user(ScriptPrompts.visionProbe(),
+                        List.of(ContactSheet.digits(digits)))), "off", 400, false);
+                ok = answer.replaceAll("\\D", "").contains(digits);
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.FINE, "vision probe failed", e);
+                ok = false;
+            }
+            visionOk.set(ok);
+            plugin.getLogger().info(ok ? "Vision probe passed: the model receives rendered images"
+                    : "Vision probe failed: images do not reach the model; visual checks are disabled for this session");
+            return ok;
+        }
+    }
+
+    private byte[] sheet(VoxelModel model) {
+        return ContactSheet.of(model, info, cfg.get().visionImageSize);
+    }
+
+    /**
+     * Pairwise judgement: -1 when A is better, +1 when B is better, 0 for a tie. Both orders are asked in
+     * parallel; disagreement (position bias) counts as a tie.
+     */
+    private int judge(Job job, Transcript tr, String request, byte[] a, byte[] b) throws Exception {
+        String effort = cfg.get().visionJudgeEffort;
+        Future<String> ab = side.submit(() -> callRaw(job, tr, "judge-ab", List.of(ChatMessage.system(ScriptPrompts.JUDGE_SYSTEM),
+                ChatMessage.user(ScriptPrompts.judge(request), List.of(a, b))), effort, 16000, true));
+        Future<String> ba = side.submit(() -> callRaw(job, tr, "judge-ba", List.of(ChatMessage.system(ScriptPrompts.JUDGE_SYSTEM),
+                ChatMessage.user(ScriptPrompts.judge(request), List.of(b, a))), effort, 16000, true));
+        int first = winner(await(ab, job));
+        int second = -winner(await(ba, job));
+        return first == second ? first : 0;
+    }
+
+    /** -1 for "A", +1 for "B", 0 for a tie or an unreadable answer. */
+    static int winner(String answer) {
+        try {
+            JsonElement el = Json.extract(answer).value();
+            String w = el.isJsonObject() ? Json.str(el.getAsJsonObject(), "winner", "tie").trim().toUpperCase(Locale.ROOT) : "";
+            return w.equals("A") ? -1 : w.equals("B") ? 1 : 0;
+        } catch (RuntimeException e) {
+            return 0;
+        }
+    }
+
+    /** One plain call without retries (probes, judges). */
+    private String callRaw(Job job, Transcript tr, String tag, List<ChatMessage> msgs, String effort, int maxTokens, boolean json) throws Exception {
+        PluginConfig c = cfg.get();
+        checkCancelled(job);
+        job.calls.incrementAndGet();
+        ChatResult res;
+        try {
+            res = llm.get().chat(new ChatRequest(c.model, msgs, maxTokens, c.temperature, effort, json), (cc, rc) -> { }, job.cancelled);
+        } catch (LlmException e) {
+            if ("cancelled".equals(e.code()) || job.cancelled.get()) throw new CancelledException();
+            throw e;
+        }
+        job.promptTokens.addAndGet(res.promptTokens());
+        job.completionTokens.addAndGet(res.completionTokens());
+        job.cachedTokens.addAndGet(res.cachedTokens());
+        job.reasoningTokens.addAndGet(res.reasoningTokens());
+        tr.exchange(tag + "-" + effort, msgs.getLast().content() + (msgs.getLast().hasImages() ? "\n[" + msgs.getLast().imageCount() + " image(s)]" : ""), res);
+        return res.content() == null ? "" : res.content();
+    }
+
+    /** A script revision that applied and ran. */
+    private record Revision(String source, ScriptResult result, String diagnosis) {
+    }
+
+    /** Applies the model's hunks and runs the script; one repair call when the patch or the run fails. */
+    private Revision revise(Job job, Transcript tr, ScriptRuntime runtime, ScriptRuntime.Budget budget, long seed, int[] limits,
+                            String source, String answer, List<ChatMessage> msgs, String tag, String effort) throws Exception {
+        String diagnosis = diagnosis(answer);
+        for (int attempt = 0; attempt < 2; attempt++) {
+            ScriptPatch.Result patch = ScriptPatch.apply(source, answer);
+            String problem;
+            if (patch.ok()) {
+                ScriptResult result = runtime.run(patch.source(), seed, null, limits, budget, job.cancelled);
+                tr.note(tag + "-run-" + attempt, "hunks=" + patch.hunks() + " rewrite=" + patch.fullRewrite() + " ok=" + result.ok()
+                        + " blocks=" + result.model().nonAirCount() + (result.ok() ? "" : "\n" + result.error().describe()));
+                if (result.ok()) {
+                    prepare(result);
+                    return new Revision(patch.source(), result, diagnosis);
+                }
+                problem = "the revised script fails:\n" + result.error().describe();
+            } else {
+                problem = patch.error();
+            }
+            if (attempt == 1) break;
+            msgs = new ArrayList<>(msgs);
+            msgs.add(ChatMessage.assistant(answer));
+            msgs.add(ChatMessage.user(ScriptPrompts.revisionFailed(problem)));
+            answer = callText(job, tr, tag + "-fix", effort, msgs);
+        }
+        return null;
+    }
+
+    private static String diagnosis(String answer) {
+        String a = answer == null ? "" : answer;
+        int cut = a.indexOf("<<<<<<<");
+        int fence = a.indexOf("```");
+        int end = cut < 0 ? fence : fence < 0 ? cut : Math.min(cut, fence);
+        return clip(end < 0 ? a : a.substring(0, end), 400);
+    }
+
+    private static boolean isDone(String answer) {
+        String a = answer == null ? "" : answer.strip();
+        return (a.equals("DONE") || a.startsWith("DONE") && a.length() < 200) && !ScriptPatch.hasHunks(a);
+    }
+
+    /**
+     * Script review: critic rounds over the rendered build, the analyzer findings and the script. A revision is
+     * kept only when it runs, does not add analyzer defects, keeps at least half the blocks, and (when images
+     * reach the model) the pairwise judge does not prefer the previous build. Approval is deterministic: no
+     * critical or major analyzer findings; the model's self-score is not used.
+     */
+    private Verdict verifyScript(Job job, Transcript tr, Build build, Staged st, String prompt) throws Exception {
+        PluginConfig c = cfg.get();
+        int rounds = c.criticRounds(job.mode.id);
+        AnalyzerOptions aopts = analyzerOptions(st.plan);
+        ScriptRuntime runtime = new ScriptRuntime(info);
+        ScriptRuntime.Budget budget = BuildMode.EXTRA.equals(job.mode.id) ? ScriptRuntime.Budget.extra() : ScriptRuntime.Budget.standard();
+        int ext = c.maxExtent;
+        int[] limits = {-ext, -32, -ext, ext, Math.min(320, ext * 2), ext};
+        boolean eyes = rounds > 0 && vision(job, tr);
+        String system = ScriptPrompts.system(c.includeBlockList ? blockList.get() : null);
+        String source = job.script;
+        VoxelModel model = st.model;
+        AnalysisReport rep = StructureAnalyzer.analyze(model, info, aopts);
+        List<String> rejected = new ArrayList<>();
+        Verdict v = new Verdict();
+        int accepted = 0;
+        for (int round = 1; round <= rounds; round++) {
+            checkCancelled(job);
+            v.rounds = round;
+            job.status("ИИ критикует постройку: раунд " + round + " из " + rounds + "…", 0.5 + 0.4 * (round - 1) / rounds);
+            byte[] img = eyes ? sheet(model) : null;
+            String evidence = withAutoNotes(job, rep.toText()) + "\n" + SpatialReport.render(model, info);
+            String user = ScriptPrompts.critic(prompt, source, evidence, job.scriptParts, img != null, round, rounds, rejected);
+            List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
+                    img == null ? ChatMessage.user(user) : ChatMessage.user(user, List.of(img))));
+            String effort = round == 1 ? job.mode.effortReview : job.mode.effortReviewFollowup;
+            String answer = callText(job, tr, "critic" + round, effort, msgs);
+            v.reviewerCalls++;
+            if (isDone(answer)) {
+                tr.note("critic" + round + " done", "the critic found nothing left to improve");
+                say(job, "<gray>Критик: улучшать больше нечего.</gray>");
+                break;
+            }
+            Revision r = revise(job, tr, runtime, budget, job.scriptSeed, limits, source, answer, msgs, "critic" + round, effort);
+            String what = diagnosis(answer);
+            if (r == null) {
+                rejected.add(clip(what, 200) + " — did not apply or run");
+                say(job, "<gray>Раунд <v0>: правку не удалось применить.</gray>", round);
+                continue;
+            }
+            VoxelModel next = r.result().model();
+            AnalysisReport nrep = StructureAnalyzer.analyze(next, info, aopts);
+            int crit = rep.count(dev.aibuild.analysis.Severity.CRITICAL), maj = rep.count(dev.aibuild.analysis.Severity.MAJOR);
+            int ncrit = nrep.count(dev.aibuild.analysis.Severity.CRITICAL), nmaj = nrep.count(dev.aibuild.analysis.Severity.MAJOR);
+            String gate = ncrit > crit ? "added critical analyzer findings" : nmaj > maj ? "added major analyzer findings"
+                    : next.nonAirCount() < model.nonAirCount() / 2 ? "removed more than half of the build" : null;
+            if (gate == null && eyes && c.visionJudge) {
+                int pref = judge(job, tr, prompt, sheet(model), sheet(next));
+                boolean fixedDefects = ncrit + nmaj < crit + maj;
+                if (pref < 0) gate = "the judge preferred the previous version";
+                else if (pref == 0 && !fixedDefects) gate = "no visible improvement according to the judge";
+            }
+            if (gate != null) {
+                rejected.add(clip(what, 200) + " — rejected: " + gate);
+                tr.note("critic" + round + " rejected", gate + "\n" + what);
+                say(job, "<gray>Раунд <v0>: правка отклонена (<v1>).</gray>", round, gate);
+                continue;
+            }
+            accepted++;
+            source = r.source();
+            model = next;
+            rep = nrep;
+            job.script = source;
+            job.smoothed = r.result().smoothed();
+            job.scriptParts = r.result().partTable(30);
+            synchronized (job) {
+                job.doorways.clear();
+                job.doorways.addAll(r.result().doorways());
+            }
+            st.model = model;
+            livePreview(build, model);
+            say(job, "<gray>Раунд <v0>: улучшено — <white><v1></white></gray>", round, clip(what.replace("DIAGNOSIS:", "").strip(), 180));
+        }
+        job.scriptModel = model.copy();
+        v.summary = Json.str(st.plan, "summary", "");
+        v.checklist = "critic " + accepted + "/" + v.rounds;
+        v.issuesFixed = accepted;
+        v.finalReport = rep;
+        v.approved = !rep.hasBlocking();
+        v.score = -1;
+        return v;
+    }
+
+    /**
+     * Edits a script build by changing its script. Returns false (and leaves the build untouched) when the edit
+     * cannot be applied, so the caller falls back to the JSON-op edit pipeline.
+     */
+    private boolean editScript(Job job, Transcript tr, Build build, BuildVersion cur, VoxelModel model, JsonObject plan,
+                               String original, String change) throws Exception {
+        PluginConfig c = cfg.get();
+        ScriptRuntime runtime = new ScriptRuntime(info);
+        ScriptRuntime.Budget budget = BuildMode.EXTRA.equals(job.mode.id) ? ScriptRuntime.Budget.extra() : ScriptRuntime.Budget.standard();
+        int ext = c.maxExtent;
+        int[] limits = {-ext, -32, -ext, ext, Math.min(320, ext * 2), ext};
+        ScriptResult base = runtime.run(cur.script, cur.seed, null, limits, budget, job.cancelled);
+        if (!base.ok()) {
+            tr.note("edit-script skipped", "stored script no longer runs: " + base.error().describe());
+            return false;
+        }
+        job.status("ИИ изменяет программу постройки…", 0.1);
+        AnalyzerOptions aopts = analyzerOptions(plan);
+        AnalysisReport rep = StructureAnalyzer.analyze(model, info, aopts);
+        boolean eyes = vision(job, tr);
+        byte[] img = eyes ? sheet(model) : null;
+        String user = ScriptPrompts.edit(original, change, cur.script, withAutoNotes(job, rep.toText()), base.partTable(30), img != null);
+        List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(ScriptPrompts.system(c.includeBlockList ? blockList.get() : null)),
+                img == null ? ChatMessage.user(user) : ChatMessage.user(user, List.of(img))));
+        String answer = callText(job, tr, "edit-script", job.mode.effortEdit, msgs);
+        Revision r = revise(job, tr, runtime, budget, cur.seed, limits, cur.script, answer, msgs, "edit-script", job.mode.effortEdit);
+        if (r == null) {
+            say(job, "<yellow>Правку программы применить не удалось, используем обычную правку.</yellow>");
+            return false;
+        }
+        VoxelModel next = r.result().model();
+        AnalysisReport nrep = StructureAnalyzer.analyze(next, info, aopts);
+        job.script = r.source();
+        job.scriptSeed = cur.seed;
+        job.smoothed = r.result().smoothed();
+        job.scriptParts = r.result().partTable(30);
+        job.scriptModel = next.copy();
+        synchronized (job) {
+            job.doorways.clear();
+            job.doorways.addAll(r.result().doorways());
+        }
+        livePreview(build, next);
+        Verdict v = new Verdict();
+        v.rounds = 1;
+        v.summary = clip(r.diagnosis().replace("CHANGE:", "").strip(), 300);
+        v.finalReport = nrep;
+        v.approved = nrep.count(dev.aibuild.analysis.Severity.CRITICAL) <= rep.count(dev.aibuild.analysis.Severity.CRITICAL)
+                && nrep.count(dev.aibuild.analysis.Severity.MAJOR) <= rep.count(dev.aibuild.analysis.Severity.MAJOR);
+        if (!v.approved) v.blockers.put("regression", "the change added analyzer defects");
+        v.score = -1;
+        commit(job, build, next, change, v, tr);
+        return true;
+    }
+
+    /** The brief of a script build: its meta() call plus the real bounds of what it placed. */
+    private static JsonObject planFromScript(ScriptResult result, String prompt) {
+        JsonObject meta = result.meta();
+        JsonObject plan = new JsonObject();
+        plan.addProperty("title", Json.str(meta, "title", "Постройка"));
+        plan.addProperty("summary", Json.str(meta, "summary", ""));
+        plan.addProperty("type", Json.str(meta, "type", "object").toLowerCase(Locale.ROOT));
+        plan.addProperty("style", Json.str(meta, "style", ""));
+        plan.addProperty("expect_interior", Json.bool(meta, "expect_interior", false));
+        if (Json.obj(meta, "exact_size") != null) plan.add("exact_size", Json.obj(meta, "exact_size"));
+        if (Json.obj(meta, "size_limits") != null) plan.add("size_limits", Json.obj(meta, "size_limits"));
+        JsonArray rooms = Json.arr(meta, "rooms");
+        if (!rooms.isEmpty()) {
+            java.util.Map<String, JsonArray> byLevel = new java.util.LinkedHashMap<>();
+            for (JsonElement r : rooms) {
+                if (!r.isJsonObject()) continue;
+                byLevel.computeIfAbsent(Json.str(r.getAsJsonObject(), "level", "ground floor"), k -> new JsonArray()).add(r);
+            }
+            JsonArray layout = new JsonArray();
+            byLevel.forEach((level, list) -> {
+                JsonObject lv = new JsonObject();
+                lv.addProperty("level", level);
+                lv.add("rooms", list);
+                layout.add(lv);
+            });
+            plan.add("layout", layout);
+        }
+        int[] b = result.model().solidBounds();
+        if (b == null) b = new int[]{0, 0, 0, 0, 0, 0};
+        JsonObject plot = new JsonObject();
+        JsonArray mn = new JsonArray(), mx = new JsonArray();
+        for (int i = 0; i < 3; i++) {
+            mn.add(b[i]);
+            mx.add(b[i + 3]);
+        }
+        plot.add("min", mn);
+        plot.add("max", mx);
+        plan.add("plot", plot);
+        plan.addProperty("request", prompt);
+        return plan;
+    }
+
+    /** Block-count guidance for the script prompt, by thinking mode. */
+    private static String scaleHint(BuildMode mode) {
+        return switch (mode.id) {
+            case BuildMode.FAST -> "Keep it compact but complete (usually 1,500-20,000 blocks).";
+            case BuildMode.EXTRA -> "Spend detail generously: large, rich builds are welcome (up to ~250,000 blocks when the subject deserves it).";
+            default -> "Make it rich and complete (usually 4,000-80,000 blocks; more for castles, ships and scenes).";
+        };
     }
 
     private Staged designAndCompile(Job job, Transcript tr, String prompt, Build build, Anchor anchor,
@@ -241,14 +785,16 @@ public final class BuildPipeline {
         normalizePlan(plan, cfg.get());
         plan.remove("stages");
         int[] plot = plotBounds(plan);
-        sync(() -> {
-            build.name = Json.str(plan, "title", "Постройка");
-            build.plan = plan;
-            if (build.originalPrompt == null || isRebuild) build.originalPrompt = prompt;
-            if (anchor != null && !build.placed && build.versions.isEmpty()) place(build, anchor, plot);
-            store.save(build);
-            return null;
-        });
+        if (build != null) {
+            sync(() -> {
+                build.name = Json.str(plan, "title", "Постройка");
+                build.plan = plan;
+                if (build.originalPrompt == null || isRebuild) build.originalPrompt = prompt;
+                if (anchor != null && !build.placed && build.versions.isEmpty()) place(build, anchor, plot);
+                store.save(build);
+                return null;
+            });
+        }
         job.plotLimits = new int[]{plot[0] - 3, plot[1] - 2, plot[2] - 3, plot[3] + 3, plot[4] + 2, plot[5] + 3};
         Staged st = new Staged();
         st.plan = plan;
@@ -260,7 +806,7 @@ public final class BuildPipeline {
         tr.note("compile result", result.summary() + "\nresolver: " + postProcess(job, st.model));
         livePreview(build, st.model);
         say(job, "<gray>Программа постройки готова: <white><v0></white>, <v1> блоков. Проверяем конструкцию, фасады и интерьер.</gray>",
-                build.name, st.model.nonAirCount());
+                Json.str(plan, "title", "Постройка"), st.model.nonAirCount());
         return st;
     }
 
@@ -378,6 +924,9 @@ public final class BuildPipeline {
         if (plan == null) plan = syntheticPlan(build.name);
         String original = build.originalPrompt == null ? Json.str(plan, "title", "") : build.originalPrompt;
         String history = sync(() -> String.join(" | ", build.history));
+
+        BuildVersion cur = sync(build::current);
+        if (cur != null && cur.script != null && cur.scriptExact && editScript(job, tr, build, cur, model, plan, original, change)) return;
 
         EditResult er = switch (c.editStrategy) {
             case "steps" -> editSteps(job, tr, model, plan, original, history, change, build);
@@ -969,6 +1518,93 @@ public final class BuildPipeline {
         return id;
     }
 
+    /**
+     * Creation benchmark: the classic compiled JSON-op pipeline and the build-script pipeline run the same prompt
+     * in parallel, nothing is placed. Writes both models, real-colour render sheets, metrics and a report;
+     * {@code tools/blind_ballot.py} turns any number of these into one blind human ballot.
+     */
+    public String startCreateBench(String prompt, BuildMode mode) {
+        String id = "bench-" + Integer.toHexString(benchRandom.nextInt(0xFFFFFF) | 0x100000);
+        Job job = new Job(id, null, Job.Kind.BENCH, prompt, mode);
+        job.quiet = true;
+        jobsByBuild.put(id, job);
+        job.future = pool.submit(() -> {
+            try {
+                runCreateBench(job, id, prompt);
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.WARNING, "bench " + id + " failed", e);
+                Msg.to(null, "<red>Бенчмарк <v0> упал: <v1></red>", id, shortError(e));
+            } finally {
+                job.finished = true;
+                jobsByBuild.remove(id, job);
+            }
+        });
+        return id;
+    }
+
+    private void runCreateBench(Job job, String id, String prompt) throws Exception {
+        PluginConfig c = cfg.get();
+        job.status("Бенчмарк: классический и скриптовый конвейеры параллельно", 0.05);
+        Future<Variant> compiled = side.submit(() -> runVariant(job, id, "compiled", new VoxelModel(), new JsonObject(), (cj, ctr, m) -> {
+            Staged st = designAndCompile(cj, ctr, prompt, null, null, false);
+            String strategy = c.reviewStrategy;
+            int cap = "adaptive".equals(strategy) ? c.adaptiveMaxRounds : cj.mode.verifyRounds;
+            Verdict v = verify(cj, ctr, new OpExecutor(info).withLimits(st.limits), st.model, st.plan, st.planText, prompt, null,
+                    Checklist.forCreate(st.plan), strategy, cap, 0.68);
+            m.clear();
+            st.model.forEach(m::set);
+            return v;
+        }));
+        Future<Variant> script = side.submit(() -> runVariant(job, id, "script", new VoxelModel(), new JsonObject(), (cj, ctr, m) -> {
+            Staged st = designAndScript(cj, ctr, prompt, null, null, false);
+            Verdict v = cj.script != null ? verifyScript(cj, ctr, null, st, prompt) : new Verdict();
+            m.clear();
+            st.model.forEach(m::set);
+            return v;
+        }));
+        Variant a = await(compiled, job), b = await(script, job);
+        StringBuilder md = new StringBuilder("# " + id + " — compiled vs script\n\n* Запрос: " + prompt + "\n* Режим: " + job.mode.id
+                + "\n* Модель: " + c.model + "\n* Рендер: " + (dev.aibuild.analysis.IsoRenderer.hasTextureColours() ? "цвета текстур клиента" : "приблизительные цвета") + "\n\n");
+        md.append("| вариант | блоков | время, с | вызовов | токены вход/выход/мысли | critical | major | раундов | одобрено | ошибка |\n|---|---|---|---|---|---|---|---|---|---|\n");
+        for (Variant v : List.of(a, b)) {
+            md.append("| ").append(v.name).append(" | ").append(v.blocks).append(" | ").append(v.seconds).append(" | ").append(v.calls)
+                    .append(" | ").append(v.promptTokens).append('/').append(v.completionTokens).append('/').append(v.reasoningTokens)
+                    .append(" | ").append(v.critical).append(" | ").append(v.major).append(" | ").append(v.rounds)
+                    .append(" | ").append(v.approved).append(" | ").append(v.error == null ? "" : v.error).append(" |\n");
+            if (v.model != null && !v.model.isEmpty()) {
+                try {
+                    dev.aibuild.analysis.IsoRenderer.writePng(dev.aibuild.analysis.IsoRenderer.renderSheet(v.model, info, 8),
+                            new File(benchDir(id), "strategy-" + v.name + ".png"));
+                } catch (IOException e) {
+                    plugin.getLogger().log(Level.WARNING, "bench render failed", e);
+                }
+            }
+        }
+        JsonObject meta = new JsonObject();
+        meta.addProperty("prompt", prompt);
+        meta.addProperty("mode", job.mode.id);
+        meta.addProperty("model", c.model);
+        for (Variant v : List.of(a, b)) {
+            JsonObject o = new JsonObject();
+            o.addProperty("blocks", v.blocks);
+            o.addProperty("seconds", v.seconds);
+            o.addProperty("calls", v.calls);
+            o.addProperty("promptTokens", v.promptTokens);
+            o.addProperty("completionTokens", v.completionTokens);
+            o.addProperty("reasoningTokens", v.reasoningTokens);
+            o.addProperty("critical", v.critical);
+            o.addProperty("major", v.major);
+            o.addProperty("approved", v.approved);
+            if (v.error != null) o.addProperty("error", v.error);
+            meta.add(v.name, o);
+        }
+        Files.writeString(new File(benchDir(id), "bench.json").toPath(), Json.PRETTY.toJson(meta), StandardCharsets.UTF_8);
+        Files.writeString(new File(benchDir(id), "report.md").toPath(), md.toString(), StandardCharsets.UTF_8);
+        Msg.to(null, "<green>Бенчмарк <v0> готов:</green> <gray>compiled <v1> бл. за <v2> с, script <v3> бл. за <v4> с. "
+                + "Рендеры: plugins/AIBuild/bench/<v0>/ (слепое голосование: tools/blind_ballot.py)</gray>",
+                id, a.blocks, a.seconds, b.blocks, b.seconds);
+    }
+
     private void runReviewBench(Job job, String id, String prompt) throws Exception {
         PluginConfig c = cfg.get();
         Transcript tr = new Transcript(id + "/build", true);
@@ -1287,6 +1923,12 @@ public final class BuildPipeline {
             ver.score = v.score;
             ver.mode = job.mode.id;
             ver.approved = v.approved;
+            if (job.script != null) {
+                ver.script = job.script;
+                ver.seed = job.scriptSeed;
+                ver.stdlibVersion = ScriptRuntime.STDLIB_VERSION;
+                ver.scriptExact = job.scriptModel != null && job.scriptModel.entries().equals(fin.entries());
+            }
             // drop redo branch
             while (build.versions.size() > build.currentVersion + 1) build.versions.remove(build.versions.size() - 1);
             build.versions.add(ver);
@@ -1414,6 +2056,72 @@ public final class BuildPipeline {
         };
     }
 
+    /**
+     * Free-text call (build scripts): sends {@code msgs} as given, retries once on an empty or truncated answer and
+     * lowers reasoning when the whole budget went into thinking. Returns the answer text.
+     */
+    private String callText(Job job, Transcript tr, String tag, String effort, List<ChatMessage> msgs) throws Exception {
+        return callText(job, tr, tag, effort, msgs, null);
+    }
+
+    /** As above; {@code live} additionally receives the streamed answer text (see {@link LiveScript}). */
+    private String callText(Job job, Transcript tr, String tag, String effort, List<ChatMessage> msgs,
+                            StreamListener live) throws Exception {
+        PluginConfig c = cfg.get();
+        String eff = effort;
+        String lastErr = null;
+        String lastUser = msgs.getLast().content();
+        for (int attempt = 0; attempt < 3; attempt++) {
+            checkCancelled(job);
+            ChatRequest req = new ChatRequest(c.model, msgs, job.mode.maxTokens, c.temperature, eff, false);
+            job.calls.incrementAndGet();
+            ChatResult res;
+            try {
+                res = llm.get().chat(req, new StreamListener() {
+                    @Override
+                    public void onProgress(int cc, int rc) {
+                        job.streamChars = cc;
+                        job.reasoningChars = rc;
+                    }
+
+                    @Override
+                    public void onText(CharSequence text) {
+                        if (live != null) live.onText(text);
+                    }
+                }, job.cancelled);
+            } catch (LlmException e) {
+                if ("cancelled".equals(e.code()) || job.cancelled.get()) throw new CancelledException();
+                throw e;
+            }
+            job.promptTokens.addAndGet(res.promptTokens());
+            job.completionTokens.addAndGet(res.completionTokens());
+            job.cachedTokens.addAndGet(res.cachedTokens());
+            job.reasoningTokens.addAndGet(res.reasoningTokens());
+            tr.exchange(tag + (attempt > 0 ? "-retry" + attempt : "") + "-" + (eff == null ? "default" : eff), lastUser, res);
+            boolean truncated = "length".equals(res.finishReason());
+            boolean empty = res.content() == null || res.content().isBlank();
+            if (!empty && !truncated) return res.content();
+            lastErr = truncated ? "output truncated" : "empty answer";
+            if (truncated && empty && !"off".equals(eff)) {
+                String lower = lowerEffort(eff);
+                if ((job.mode.id.equals(BuildMode.STANDARD) || job.mode.id.equals(BuildMode.EXTRA)) && lower.equals("off")) {
+                    throw new IllegalStateException("thinking budget exhausted; refusing to downgrade " + job.mode.id + " to no-thinking");
+                }
+                plugin.getLogger().warning("[" + tag + "] output budget exhausted while thinking (effort " + eff + "), retrying with " + lower);
+                eff = lower;
+                continue;
+            }
+            if (truncated && !empty) {
+                // the script was cut off: ask for a more compact version in the same conversation
+                msgs = new ArrayList<>(msgs);
+                msgs.add(ChatMessage.assistant(clip(res.content(), 2000)));
+                msgs.add(ChatMessage.user("Your script was cut off by the output limit. Write the COMPLETE script again, more compactly: "
+                        + "use loops, functions, shapes and kits instead of long lists of blocks."));
+            }
+        }
+        throw new IllegalStateException("модель не вернула программу: " + lastErr);
+    }
+
     private JsonObject callJson(Job job, Transcript tr, String tag, String effort, String userMsg) throws Exception {
         PluginConfig c = cfg.get();
         String system = Prompts.system(c.includeBlockList ? blockList.get() : null);
@@ -1532,7 +2240,7 @@ public final class BuildPipeline {
             if (corrected > 0) notes.add("restored " + corrected + " entrance cells required by the architectural envelope");
         }
         if (cfg.get().autoOrient) {
-            List<String> o = dev.aibuild.model.OrientationFixer.fix(model, info);
+            List<String> o = dev.aibuild.model.OrientationFixer.fix(model, info, job == null ? java.util.Set.of() : job.smoothed);
             notes.addAll(o);
             if (job != null && !o.isEmpty()) {
                 synchronized (job) {

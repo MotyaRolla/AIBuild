@@ -296,12 +296,7 @@ public class CommandCodeGenerateClient extends AbstractStreamingClient {
             }
             JsonObject msg = new JsonObject();
             msg.addProperty("role", "assistant".equals(m.role()) ? "assistant" : "user");
-            JsonArray parts = new JsonArray();
-            JsonObject part = new JsonObject();
-            part.addProperty("type", "text");
-            part.addProperty("text", m.content());
-            parts.add(part);
-            msg.add("content", parts);
+            msg.add("content", m.contentParts().toPartsJson());
             messages.add(msg);
         }
         if (messages.isEmpty()) {
@@ -437,7 +432,7 @@ public class CommandCodeGenerateClient extends AbstractStreamingClient {
                 failure = LlmException.invalidResponse("repetitive build operations in stream", null);
                 return ApplyResult.FAILED;
             }
-            progress.maybe(content.length(), reasoning.length());
+            progress.maybe(content, reasoning.length());
             return ApplyResult.OK;
         }
 
@@ -500,7 +495,7 @@ public class CommandCodeGenerateClient extends AbstractStreamingClient {
         }
 
         ChatResult toResult(long elapsedMs, String transport) {
-            progress.finish(content.length(), reasoning.length());
+            progress.finish(content, reasoning.length());
             String fr = finishReason;
             if (fr == null || fr.isBlank()) {
                 fr = hasContent() ? (sawFinish ? "stop" : "eof") : "empty";

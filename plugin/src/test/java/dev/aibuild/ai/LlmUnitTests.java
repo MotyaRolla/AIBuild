@@ -149,7 +149,7 @@ public final class LlmUnitTests {
         StreamListener.NOOP.onProgress(1, 2);
         StreamListener.fire((c, rr) -> {
             throw new IllegalStateException("listener bug");
-        }, 1, 1);
+        }, "x", 1);
         check("listener exceptions swallowed", true);
         ok("value records behave defensively");
     }

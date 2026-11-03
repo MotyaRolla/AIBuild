@@ -114,7 +114,13 @@ public final class OrientationFixer {
      * iteration order. Returns compact notes for the LLM, e.g. "auto-oriented 12 roof stairs, 3 eave stairs".
      */
     public static List<String> fix(VoxelModel model, BlockInfo info) {
+        return fix(model, info, java.util.Set.of());
+    }
+
+    /** Like {@link #fix(VoxelModel, BlockInfo)} but never touches cells in {@code keep} (deliberately oriented). */
+    public static List<String> fix(VoxelModel model, BlockInfo info, java.util.Set<Long> keep) {
         List<Change> changes = analyze(model, info);
+        if (!keep.isEmpty()) changes.removeIf(c -> keep.contains(VoxelModel.key(c.x, c.y, c.z)));
         for (Change c : changes) model.set(c.x, c.y, c.z, c.to);
         return summarize(changes);
     }

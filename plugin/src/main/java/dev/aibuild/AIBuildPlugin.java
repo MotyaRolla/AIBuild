@@ -82,9 +82,23 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
         registerCommand("aibuild", "AI build generation and editing", List.of("aib", "ai"), command);
         getServer().getPluginManager().registerEvents(this, this);
         Bukkit.getScheduler().runTaskTimer(this, this::updateBars, 20L, 10L);
+        loadTextureColours();
         getLogger().info("AIBuild enabled: model " + config.model + " via " + config.baseUrl + " (" + config.transport + "), "
                 + store.all().size() + " builds loaded, " + blockInfo.blockNames().size() + " block types"
                 + (config.apiKey.isBlank() ? " — WARNING: api.key is empty!" : ""));
+    }
+
+    /** Derives real block colours for renders (and the vision judge) from the vanilla client, off the main thread. */
+    private void loadTextureColours() {
+        if (!config.renderTextures) return;
+        String version = Bukkit.getMinecraftVersion();
+        Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
+            try {
+                dev.aibuild.analysis.IsoRenderer.useTextureColours(dev.aibuild.render.TextureCache.load(getDataFolder(), version, getLogger()));
+            } catch (Exception e) {
+                getLogger().warning("Render colours from client textures unavailable (" + e.getMessage() + "); using built-in colours");
+            }
+        });
     }
 
     @Override

@@ -272,7 +272,8 @@ abstract class AbstractStreamingClient implements LlmClient {
         }
 
         /** Reports progress if at least 250 ms passed since the previous callback. */
-        void maybe(int contentChars, int reasoningChars) {
+        void maybe(CharSequence content, int reasoningChars) {
+            int contentChars = content.length();
             if (listener == null) {
                 return;
             }
@@ -286,11 +287,12 @@ abstract class AbstractStreamingClient implements LlmClient {
             lastNanos = now;
             lastContent = contentChars;
             lastReasoning = reasoningChars;
-            StreamListener.fire(listener, contentChars, reasoningChars);
+            StreamListener.fire(listener, content, reasoningChars);
         }
 
         /** Forces a final callback with the totals, if anything was produced. */
-        void finish(int contentChars, int reasoningChars) {
+        void finish(CharSequence content, int reasoningChars) {
+            int contentChars = content.length();
             if (listener == null) {
                 return;
             }
@@ -299,7 +301,7 @@ abstract class AbstractStreamingClient implements LlmClient {
             }
             lastContent = contentChars;
             lastReasoning = reasoningChars;
-            StreamListener.fire(listener, contentChars, reasoningChars);
+            StreamListener.fire(listener, content, reasoningChars);
         }
     }
 

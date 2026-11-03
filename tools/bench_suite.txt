@@ -1,0 +1,25 @@
+# Fixed A/B suite for `/aib bench create --mode standard <prompt>` (one line = one prompt).
+# Run every line once per seed (3 seeds are recommended), then build one ballot:
+#   python3 tools/blind_ballot.py make plugins/AIBuild/bench/bench-* --output bench/ballot-<date>
+# Houses
+уютный средневековый домик с садом, 14 на 11
+двухэтажный городской дом с лавкой на первом этаже
+таверна у дороги с вывеской, конюшней и двором
+# Castles and towers
+небольшой каменный замок с четырьмя башнями и рвом
+башня волшебника с винтовой лестницей и куполом
+сторожевая башня на скале у моря
+# Bridges and infrastructure
+каменный арочный мост через ручей
+деревянный мост на сваях через болото
+# Creatures and sculptures
+дракон, сидящий на скале с расправленными крыльями
+статуя рыцаря с мечом на пьедестале
+рыжий кот, свернувшийся клубком на подушке
+# Vehicles
+парусный корабль с тремя мачтами
+стимпанк-дирижабль с гондолой и пропеллерами
+# Trees and scenes
+огромное древнее дерево с домиком на ветвях
+японский сад с прудом, мостиком и пагодой
+маленькая деревня из трёх домов вокруг колодца

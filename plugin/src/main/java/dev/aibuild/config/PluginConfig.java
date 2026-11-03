@@ -9,6 +9,24 @@ import java.util.Map;
 
 /** Immutable snapshot of config.yml. */
 public final class PluginConfig {
+    /** Candidate scripts written in parallel for a new build in mode {@code mode}. */
+    public int scriptCandidates(String mode) {
+        return scriptCandidates.getOrDefault(mode, 1);
+    }
+
+    /** Critic rounds after a script build in mode {@code mode}. */
+    public int criticRounds(String mode) {
+        return criticRounds.getOrDefault(mode, 1);
+    }
+
+    private static Map<String, Integer> perMode(org.bukkit.configuration.ConfigurationSection c, String path,
+                                                Map<String, Integer> defaults, int min, int max) {
+        Map<String, Integer> out = new java.util.HashMap<>(defaults);
+        org.bukkit.configuration.ConfigurationSection s = c.getConfigurationSection(path);
+        if (s != null) for (String k : s.getKeys(false)) out.put(k, Math.max(min, Math.min(max, s.getInt(k, out.getOrDefault(k, min)))));
+        return Map.copyOf(out);
+    }
+
     public final String apiKey;
     public final String baseUrl;
     public final String model;
@@ -29,6 +47,17 @@ public final class PluginConfig {
     /** "planned" (edit plan + steps) or "direct" (one call). */
     public final String editStrategy;
     public final String createStrategy;
+    /** Script strategy: repair calls after a failing script, and whether to fall back to the JSON-op program. */
+    public final int scriptRepairAttempts;
+    public final boolean scriptFallback;
+    private final Map<String, Integer> scriptCandidates;
+    private final Map<String, Integer> criticRounds;
+    /** Send renders to the model (critic, judge) when the gateway delivers images. */
+    public final boolean visionEnabled;
+    /** Use the pairwise vision judge to pick candidates and accept critic revisions. */
+    public final boolean visionJudge;
+    public final int visionImageSize;
+    public final String visionJudgeEffort;
     public final int adaptiveMaxRounds;
     public final String judgeEffort;
     public final boolean repairFailedOps;
@@ -44,6 +73,8 @@ public final class PluginConfig {
     public final int maxFoundationDepth;
 
     public final boolean saveTranscripts;
+    /** Derive render colours from the vanilla client textures (downloaded once from Mojang). */
+    public final boolean renderTextures;
 
     public PluginConfig(FileConfiguration c) {
         String key = c.getString("api.key", "");
@@ -94,8 +125,16 @@ public final class PluginConfig {
         reviewStrategy = rs.equals("fixed") ? "fixed" : "adaptive";
         String es = c.getString("generation.edit-strategy", "plan").trim().toLowerCase(java.util.Locale.ROOT);
         editStrategy = es.equals("direct") || es.equals("steps") ? es : "plan";
-        createStrategy = "staged".equalsIgnoreCase(c.getString("generation.create-strategy", "compiled"))
-                ? "staged" : "compiled";
+        String cs = c.getString("generation.create-strategy", "script").trim().toLowerCase(java.util.Locale.ROOT);
+        createStrategy = cs.equals("staged") || cs.equals("compiled") ? cs : "script";
+        scriptRepairAttempts = Math.max(0, Math.min(5, c.getInt("script.repair-attempts", 3)));
+        scriptFallback = c.getBoolean("script.fallback-to-ops", true);
+        scriptCandidates = perMode(c, "script.candidates", Map.of("fast", 1, "light", 1, "standard", 2, "extra", 3), 1, 5);
+        criticRounds = perMode(c, "script.critic-rounds", Map.of("fast", 0, "light", 1, "standard", 2, "extra", 3), 0, 6);
+        visionEnabled = c.getBoolean("vision.enabled", true);
+        visionJudge = c.getBoolean("vision.judge", true);
+        visionImageSize = Math.clamp(c.getInt("vision.image-size", 1024), 256, 2048);
+        visionJudgeEffort = BuildMode.effort(c.getString("vision.judge-effort", "low"));
         adaptiveMaxRounds = Math.max(1, Math.min(12, c.getInt("generation.adaptive-max-rounds", 6)));
         judgeEffort = BuildMode.effort(c.getString("bench.judge-effort", "high"));
         autoOrient = c.getBoolean("generation.auto-orient", true);
@@ -104,6 +143,7 @@ public final class PluginConfig {
         maxExtent = Math.max(8, c.getInt("generation.max-extent", 96));
         distance = Math.max(0, c.getInt("generation.distance", 3));
         includeBlockList = c.getBoolean("generation.include-block-list", true);
+        renderTextures = !"off".equalsIgnoreCase(c.getString("render.textures", "auto"));
 
         blocksPerTick = Math.max(100, c.getInt("placement.blocks-per-tick", 4000));
         foundationBlock = c.getString("placement.foundation-block", "cobblestone");

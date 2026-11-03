@@ -17,9 +17,10 @@ api:
 generation:
   # Thinking mode used when a player has not chosen one with /aib mode (fast | light | standard | extra)
   default-mode: standard
-  # Write one complete architectural program, retaining the mode's construction thinking.
-  # staged restores the original plan -> individual construction calls for comparisons.
-  create-strategy: compiled
+  # script   = the AI writes one JavaScript build program (smooth shapes, materials, kits; see stdlib/api-card.md)
+  #            that runs in a sandbox; errors go back to the AI as a traceback (default)
+  # compiled = one JSON op program (1.x behaviour); staged = plan + separate construction calls
+  create-strategy: script
   auto-orient: true          # auto-correct stair facing / slab type from context (roof slopes, wall-backed, chairs)
   # Self-verification: "adaptive" = reviewers work through a checklist and decide themselves when everything is
   # verified (stops early, continues while fixes need re-checking, capped by adaptive-max-rounds);
@@ -38,6 +39,30 @@ generation:
   max-extent: 96             # max size of a build along any axis
   distance: 3                # gap between the player and the build front
   include-block-list: true   # send the full 26.3 block list to the model (better validity)
+
+script:
+  repair-attempts: 3         # calls to fix a script that fails (syntax/API/runtime errors are sent back verbatim)
+  fallback-to-ops: true      # if it still fails, build with the classic JSON-op program instead
+  # independent scripts written in parallel for a new build; the best one is kept (fewest analyzer defects,
+  # then the vision judge)
+  candidates:
+    fast: 1
+    light: 1
+    standard: 2
+    extra: 3
+  # critic rounds after construction: the AI looks at the rendered build, the analysis and its script and edits
+  # the script; a revision is kept only if it adds no analyzer defects and the judge does not prefer the old build
+  critic-rounds:
+    fast: 0
+    light: 1
+    standard: 2
+    extra: 3
+
+vision:
+  enabled: true              # send renders to the AI (checked once per session with a test image)
+  judge: true                # pairwise visual judge for candidate selection and accepting critic revisions
+  image-size: 1024           # longest side of each render sheet in pixels
+  judge-effort: low          # reasoning per judge call (two calls per comparison, sides swapped)
 
 # Thinking modes. Players pick one with /aib mode <id>, or per request: /aib create --mode extra ...
 # Reasoning effort per pipeline role: off | low | medium | high | xhigh | max
@@ -96,6 +121,12 @@ modes:
 
 bench:
   judge-effort: high         # reasoning of the blind judge in /aib bench
+
+render:
+  # auto = download the vanilla client jar once from Mojang (piston-meta.mojang.com), derive one colour per block
+  # from its textures for renders and the AI's visual checks, keep only plugins/AIBuild/textures/<ver>/colors.json.
+  # The textures are Mojang's; their use is governed by the Minecraft EULA. off = built-in approximate colours.
+  textures: auto
 
 placement:
   blocks-per-tick: 4000

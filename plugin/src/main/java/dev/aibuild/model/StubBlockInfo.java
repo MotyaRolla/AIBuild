@@ -241,7 +241,7 @@ public final class StubBlockInfo implements BlockInfo {
     @Override
     public BlockSpec rotate(BlockSpec spec, int turns) {
         int t = ((turns % 4) + 4) % 4;
-        if (t == 0 || spec.props().isEmpty()) return spec;
+        if (t == 0) return spec;
         BlockSpec s = spec;
         for (int i = 0; i < t; i++) s = rotateOnce(s);
         return canonical(s);
@@ -309,7 +309,17 @@ public final class StubBlockInfo implements BlockInfo {
                 "oak_stairs", "spruce_stairs", "oak_slab", "spruce_slab", "glass", "glass_pane", "oak_door",
                 "spruce_door", "oak_trapdoor", "spruce_trapdoor", "oak_fence", "spruce_fence", "torch", "wall_torch",
                 "lantern", "iron_chain", "red_bed", "chest", "barrel", "crafting_table", "furnace", "bookshelf",
-                "white_terracotta", "grass_block", "dirt_path", "oak_leaves", "poppy", "campfire", "ladder"));
+                "white_terracotta", "grass_block", "dirt_path", "oak_leaves", "poppy", "campfire", "ladder",
+                "stone_stairs", "stone_slab", "cobblestone_stairs", "cobblestone_slab", "cobblestone_wall",
+                "mossy_cobblestone_stairs", "mossy_cobblestone_slab", "stone_brick_stairs", "stone_brick_slab",
+                "stone_brick_wall", "mossy_stone_bricks", "cracked_stone_bricks", "mossy_stone_brick_stairs",
+                "mossy_stone_brick_slab", "dark_oak_stairs", "dark_oak_slab", "dark_oak_log", "dark_oak_fence",
+                "spruce_leaves", "birch_log", "birch_leaves", "bricks", "brick_stairs", "brick_slab", "brick_wall",
+                "deepslate_tiles", "deepslate_tile_stairs", "deepslate_tile_slab", "andesite", "coarse_dirt", "gravel",
+                "dirt", "lightning_rod", "water", "oak_pressure_plate", "spruce_pressure_plate", "lantern",
+                "bookshelf", "red_carpet", "white_wool", "short_grass", "dandelion", "cornflower", "oxeye_daisy",
+                "azure_bluet", "fern", "iron_chain", "barrel", "smoker", "cauldron", "glass_pane", "spruce_trapdoor"));
+        l = new ArrayList<>(new java.util.TreeSet<>(l));
         l.sort(null);
         return l;
     }

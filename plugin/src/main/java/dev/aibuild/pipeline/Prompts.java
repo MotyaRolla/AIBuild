@@ -8,6 +8,12 @@ public final class Prompts {
     private Prompts() {
     }
 
+    /** The block-state and orientation rules of the system prompt, shared with the build-script prompt. */
+    static String blockStateRules() {
+        int a = SYSTEM_HEAD.indexOf("# BLOCK STATE SYNTAX"), b = SYSTEM_HEAD.indexOf("# OPERATIONS");
+        return a < 0 || b < a ? "" : SYSTEM_HEAD.substring(a, b).strip();
+    }
+
     public static String system(String blockList) {
         return SYSTEM_HEAD + (blockList == null || blockList.isBlank() ? ""
                 : "\n# VALID BLOCK IDS (Minecraft Java 26.3 — use ONLY these)\n" + blockList);

@@ -206,10 +206,7 @@ public class OpenAiCompatClient extends AbstractStreamingClient {
         root.addProperty("model", req.model());
         JsonArray msgs = new JsonArray();
         for (ChatMessage m : req.messages()) {
-            JsonObject o = new JsonObject();
-            o.addProperty("role", m.role());
-            o.addProperty("content", m.content());
-            msgs.add(o);
+            msgs.add(m.toJson());
         }
         root.add("messages", msgs);
         root.addProperty("max_tokens", req.maxTokens());
@@ -357,7 +354,7 @@ public class OpenAiCompatClient extends AbstractStreamingClient {
             if (usage != null) {
                 applyUsage(usage);
             }
-            progress.maybe(content.length(), reasoning.length());
+            progress.maybe(content, reasoning.length());
             return ApplyResult.OK;
         }
 
@@ -412,7 +409,7 @@ public class OpenAiCompatClient extends AbstractStreamingClient {
         }
 
         ChatResult toResult(long elapsedMs, String transport) {
-            progress.finish(content.length(), reasoning.length());
+            progress.finish(content, reasoning.length());
             String fr = finishReason;
             if (fr == null || fr.isBlank()) {
                 fr = hasContent() ? (sawDone ? "stop" : "eof") : "empty";

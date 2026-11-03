@@ -474,6 +474,19 @@ public final class IsoRenderer {
 
     // ------------------------------------------------------------------ colour table
 
+    /** Block colours derived from the real client textures ({@code render.TextureCache}), or null until loaded. */
+    private static volatile Map<String, Integer> textureColours;
+
+    /** Installs real texture colours; they take precedence over the built-in keyword table. */
+    public static void useTextureColours(Map<String, Integer> colours) {
+        textureColours = colours == null ? null : Map.copyOf(colours);
+    }
+
+    /** Whether renders use colours derived from real textures. */
+    public static boolean hasTextureColours() {
+        return textureColours != null;
+    }
+
     /**
      * Keyword color table for ~100 common building blocks, used instead of {@link BlockInfo#mapColor} (which is a
      * rough estimate). Lookup order: exact name, dye/terracotta families, wood families, generic suffix rules;
@@ -491,7 +504,9 @@ public final class IsoRenderer {
             String n = s.name();
             Integer c = cache.get(n);
             if (c != null) return c;
-            c = lookup(n);
+            Map<String, Integer> real = textureColours;
+            c = real == null ? null : real.get(n);
+            if (c == null) c = lookup(n);
             if (c == null) {
                 int m;
                 try {

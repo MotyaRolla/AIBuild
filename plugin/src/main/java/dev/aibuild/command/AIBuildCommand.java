@@ -505,6 +505,7 @@ public final class AIBuildCommand implements BasicCommand {
     // ------------------------------------------------------------------ benchmarks
 
     /**
+     * /aib bench create [--mode m] <prompt>  — classic compiled pipeline vs build-script pipeline, renders for a blind vote.
      * /aib bench review [--mode m] <prompt>  — one shared plan+construction, then fixed vs adaptive verification.
      * /aib bench edit <id> [--mode m] <change> — old (direct+fixed) vs new (planned+adaptive) edit pipeline.
      * Nothing is placed in the world; results go to plugins/AIBuild/bench/<bench-id>/.
@@ -512,13 +513,18 @@ public final class AIBuildCommand implements BasicCommand {
     private void bench(CommandSender s, String[] a0) {
         if (!s.hasPermission("aibuild.admin")) throw new IllegalStateException("Нет прав.");
         requireKey();
-        if (a0.length < 2) throw new IllegalArgumentException("/aib bench review [--mode m] <промпт> | /aib bench edit <id> [--mode m] <правка>");
+        if (a0.length < 2) throw new IllegalArgumentException("/aib bench create|review [--mode m] <промпт> | /aib bench edit <id> [--mode m] <правка>");
         String kind = a0[0].toLowerCase(Locale.ROOT);
         ModeArgs ma = stripMode(Arrays.copyOfRange(a0, 1, a0.length));
         BuildMode mode = ma.mode() != null ? ma.mode() : plugin.modeOf(s instanceof Player p ? p.getUniqueId() : null);
         String[] a = ma.rest();
         String id;
-        if (kind.equals("review")) {
+        if (kind.equals("create")) {
+            String prompt = String.join(" ", a).trim();
+            if (prompt.isEmpty()) throw new IllegalArgumentException("Нужен промпт.");
+            id = plugin.pipeline().startCreateBench(prompt, mode);
+            Msg.send(s, "<gray>Бенчмарк создания <white><v0></white> (режим <v1>): классический (compiled) и скриптовый конвейер параллельно, рендеры для слепого сравнения.</gray>", id, mode.title);
+        } else if (kind.equals("review")) {
             String prompt = String.join(" ", a).trim();
             if (prompt.isEmpty()) throw new IllegalArgumentException("Нужен промпт.");
             id = plugin.pipeline().startReviewBench(prompt, mode);
@@ -531,7 +537,7 @@ public final class AIBuildCommand implements BasicCommand {
             id = plugin.pipeline().startEditBench(b, change, mode);
             Msg.send(s, "<gray>Бенчмарк правки <white><v0></white> на <v1> (режим <v2>): direct+fixed vs planned+adaptive, затем слепой судья.</gray>", id, b.id, mode.title);
         } else {
-            throw new IllegalArgumentException("Тип бенчмарка: review | edit");
+            throw new IllegalArgumentException("Тип бенчмарка: create | review | edit");
         }
     }
 

@@ -36,6 +36,14 @@ public final class BuildVersion {
     public String mode;
     /** null for legacy/manual versions, false for a generated draft, true for an approved generation. */
     public Boolean approved;
+    /** Build script that produced this version (script strategy), or null. */
+    public String script;
+    /** Seed the script ran with. */
+    public long seed;
+    /** Stdlib version the script ran against, or null. */
+    public String stdlibVersion;
+    /** True when re-running {@link #script} reproduces {@link #model} exactly (no later op patches). */
+    public boolean scriptExact;
 
     /** Creates an empty version (number 0, empty model). Primarily for deserialization. */
     public BuildVersion() {
@@ -73,6 +81,10 @@ public final class BuildVersion {
                 createdAt, score);
         c.mode = mode;
         c.approved = approved;
+        c.script = script;
+        c.seed = seed;
+        c.stdlibVersion = stdlibVersion;
+        c.scriptExact = scriptExact;
         return c;
     }
 
@@ -106,6 +118,12 @@ public final class BuildVersion {
         o.addProperty("score", score);
         if (mode != null) o.addProperty("mode", mode);
         if (approved != null) o.addProperty("approved", approved);
+        if (script != null) {
+            o.addProperty("script", script);
+            o.addProperty("seed", seed);
+            if (stdlibVersion != null) o.addProperty("stdlibVersion", stdlibVersion);
+            o.addProperty("scriptExact", scriptExact);
+        }
         o.add("model", (model == null ? new VoxelModel() : model).toJson());
         return o;
     }
@@ -126,6 +144,10 @@ public final class BuildVersion {
         v.score = clampInt(optInt(o, "score", 0), 0, 100);
         v.mode = optString(o, "mode");
         if (o.has("approved") && !o.get("approved").isJsonNull()) v.approved = optBoolean(o,"approved",false);
+        v.script = optString(o, "script");
+        v.seed = optLong(o, "seed", 0L);
+        v.stdlibVersion = optString(o, "stdlibVersion");
+        v.scriptExact = v.script != null && optBoolean(o, "scriptExact", false);
         JsonObject m = null;
         try {
             if (o.has("model") && o.get("model").isJsonObject()) m = o.getAsJsonObject("model");

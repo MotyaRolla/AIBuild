@@ -20,6 +20,13 @@ public interface StreamListener {
      */
     void onProgress(int contentChars, int reasoningChars);
 
+    /**
+     * Receives the answer text so far, at the same throttled moments as {@link #onProgress}. The sequence is only
+     * valid during the call (copy it to keep it). A transport retry starts the text over, so it can get shorter.
+     */
+    default void onText(CharSequence contentSoFar) {
+    }
+
     /** A listener that ignores all progress. */
     StreamListener NOOP = (contentChars, reasoningChars) -> {
     };
@@ -29,15 +36,16 @@ public interface StreamListener {
      * exception it throws.
      *
      * @param listener the listener, may be {@code null}
-     * @param content  answer characters so far
+     * @param content  answer text so far
      * @param reasoning reasoning characters so far
      */
-    static void fire(StreamListener listener, int content, int reasoning) {
+    static void fire(StreamListener listener, CharSequence content, int reasoning) {
         if (listener == null) {
             return;
         }
         try {
-            listener.onProgress(content, reasoning);
+            listener.onProgress(content.length(), reasoning);
+            listener.onText(content);
         } catch (RuntimeException ignored) {
             // A broken UI callback must never break an in-flight LLM request.
         }

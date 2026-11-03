@@ -38,6 +38,15 @@ public final class Job {
     /** Recent automatic orientation corrections (guarded by this). */
     public final java.util.List<String> autoNotes = new java.util.ArrayList<>();
     public final java.util.List<dev.aibuild.model.ops.Doorway> doorways = new java.util.ArrayList<>();
+    /** Build script of the construction (script strategy), its seed and the cells its smoother oriented. */
+    public volatile String script;
+    public volatile long scriptSeed;
+    public volatile String scriptParts = "";
+    public volatile java.util.Set<Long> smoothed = java.util.Set.of();
+    /** The model exactly as the script produced it (after post-processing), to tell whether review changed it. */
+    public volatile dev.aibuild.model.VoxelModel scriptModel;
+    /** The build was positioned by the streaming preview (its ground height predates any preview blocks). */
+    public volatile boolean liveAnchored;
 
     public Job(String buildId, UUID owner, Kind kind, String request, dev.aibuild.config.BuildMode mode) {
         this(buildId, owner, kind, request, mode, new AtomicBoolean());
