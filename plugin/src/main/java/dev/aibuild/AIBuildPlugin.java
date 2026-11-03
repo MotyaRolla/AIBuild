@@ -94,7 +94,9 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
         String version = Bukkit.getMinecraftVersion();
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
             try {
-                dev.aibuild.analysis.IsoRenderer.useTextureColours(dev.aibuild.render.TextureCache.load(getDataFolder(), version, getLogger()));
+                var assets = dev.aibuild.render.TextureCache.load(getDataFolder(), version, getLogger());
+                dev.aibuild.analysis.IsoRenderer.useTextureColours(assets.colours());
+                dev.aibuild.render.BlockTextures.install(assets.textures());
             } catch (Exception e) {
                 getLogger().warning("Render colours from client textures unavailable (" + e.getMessage() + "); using built-in colours");
             }

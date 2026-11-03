@@ -41,6 +41,8 @@ public final class Job {
     /** Build script of the construction (script strategy), its seed and the cells its smoother oriented. */
     public volatile String script;
     public volatile long scriptSeed;
+    /** Library the script is written against (stored builds keep theirs). */
+    public volatile dev.aibuild.script.Stdlib stdlib = dev.aibuild.script.Stdlib.latest();
     public volatile String scriptParts = "";
     public volatile java.util.Set<Long> smoothed = java.util.Set.of();
     /** The model exactly as the script produced it (after post-processing), to tell whether review changed it. */
@@ -62,7 +64,14 @@ public final class Job {
     }
 
     /** A quiet sub-job (benchmark variant) sharing the cancel flag and limits, with its own token accounting. */
+    /** Critic rounds for this job instead of the mode's configured count (benchmarks of older pipelines). */
+    public volatile Integer criticRounds;
+
     public Job child(String suffix) {
+        return child(suffix, mode);
+    }
+
+    public Job child(String suffix, dev.aibuild.config.BuildMode mode) {
         Job c = new Job(buildId + "/" + suffix, null, kind, request, mode, cancelled);
         c.quiet = true;
         c.plotLimits = plotLimits == null ? null : plotLimits.clone();

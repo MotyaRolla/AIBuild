@@ -254,7 +254,12 @@ public final class Rasterizer {
             if (s.d(x + 1, y, z) > 0 || s.d(x - 1, y, z) > 0) open++;
             if (s.d(x, y + 1, z) > 0 || s.d(x, y - 1, z) > 0) open++;
             if (s.d(x, y, z + 1) > 0 || s.d(x, y, z - 1) > 0) open++;
-            return new Material.Sample(x, y, z, nx, ny, nz, bounds, open >= 2);
+            // enclosure: share of 8 diagonal probes 2 blocks away that are inside (0.5 on a flat surface)
+            int inside = 0;
+            for (int k = 0; k < 8; k++) {
+                if (s.d(x + ((k & 1) == 0 ? -1.8 : 1.8), y + ((k & 2) == 0 ? -1.8 : 1.8), z + ((k & 4) == 0 ? -1.8 : 1.8)) < 0) inside++;
+            }
+            return new Material.Sample(x, y, z, nx, ny, nz, bounds, open >= 2, inside / 8.0);
         }
     }
 }

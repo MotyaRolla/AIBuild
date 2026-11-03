@@ -482,6 +482,11 @@ public final class IsoRenderer {
         textureColours = colours == null ? null : Map.copyOf(colours);
     }
 
+    /** Render colour of a block: real texture colour, keyword table, then {@link BlockInfo#mapColor}. */
+    public static int colourOf(BlockSpec s, BlockInfo info) {
+        return new ColourTable(info).colorOf(s);
+    }
+
     /** Whether renders use colours derived from real textures. */
     public static boolean hasTextureColours() {
         return textureColours != null;

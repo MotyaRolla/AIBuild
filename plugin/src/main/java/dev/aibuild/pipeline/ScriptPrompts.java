@@ -1,10 +1,8 @@
 package dev.aibuild.pipeline;
 
 import dev.aibuild.script.ScriptError;
+import dev.aibuild.script.Stdlib;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
 
 /**
  * Prompts for the build-script strategy: the model writes one JavaScript program against the stdlib
@@ -19,10 +17,11 @@ public final class ScriptPrompts {
     private ScriptPrompts() {
     }
 
-    private static final String API_CARD = resource("/stdlib/api-card.md");
-    private static final String EXAMPLES = "## Example: cottage\n```js\n" + resource("/stdlib/examples/cottage.js")
-            + "```\n## Example: creature\n```js\n" + resource("/stdlib/examples/fox.js")
-            + "```\n## Example: bridge\n```js\n" + resource("/stdlib/examples/bridge.js") + "```\n";
+    private static String examples(Stdlib lib) {
+        StringBuilder sb = new StringBuilder();
+        for (String name : lib.examples()) sb.append("## Example: ").append(name).append("\n```js\n").append(lib.example(name)).append("```\n");
+        return sb.toString();
+    }
 
     private static final String HEAD = """
             You are AIBuild — a master Minecraft builder, sculptor, architect and landscaper (Java Edition 26.3).
@@ -61,6 +60,46 @@ public final class ScriptPrompts {
             - Build everything the request names. If it asks for a scene, build the scene.
             """;
 
+    /** Craft section of the 3.0 library: master-builder standards, failure modes and the kits that implement them. */
+    private static final String CRAFT_V2 = """
+            # YOU ARE BUILDING LIKE THE BEST MINECRAFT BUILDERS
+            Players will walk around this build, look at it from eye level, zoom in, and compare it side by side with
+            another builder's version of the same request. Win that comparison. Judges look at:
+            - Recognizability: the subject is unmistakable from every side, not only the front.
+            - 3D form: true depth and sculpted shapes, never flat walls or boxes stacked on boxes.
+            - Fidelity: everything the request names is there, with the requested size and style.
+            - Proportions: parts relate correctly; Minecraft scale (doors 2 high, floors 4-5, rails 1).
+            - Detail: logical, varied and abundant where the eye goes (entrances, faces, rooflines, joints).
+            - Composition: a setting that frames the subject (ground, paths, trees, rocks, water), atmosphere, a story.
+
+            FAILURE MODES THAT LOSE EVERY TIME
+            1. Flat decoration: a box with coloured blocks painted on it. Every feature needs real depth.
+            2. Visible primitives: "that's a box, that's a cylinder". Hide the construction: blend, smooth, layer.
+            3. One flat material per surface: big single-block walls, roofs or bodies. Use mixes, weathering,
+               gradients and shade() so surfaces read like real stone, wood, fur or scales.
+            4. Lollipop trees (a ball on a stick), uniform grass, nothing on the ground: use tree(), groundCover().
+            5. Static isolation: the subject floating in empty space, or so small the scenery dominates (a plot
+               far wider than the subject, trees in front of it or taller than it close by).
+            6. Uniform detail: the same resolution everywhere instead of concentrating it on the focal areas.
+
+            HOW MASTER BUILDERS WORK
+            - Depth layers: every wall has at least 3 layers (structure/frame in front, infill set back, openings set
+              back further, with sills, trims, beams, buttresses, cornices poking out again). volume(), tower() and
+              curtainWall() build this for you: use and combine them instead of hollow boxes.
+            - Silhouette: varied heights and roof lines, overhangs, towers or chimneys breaking the skyline,
+              asymmetry where it is natural. Organic subjects get poses, not stiff symmetry.
+            - Texture and colour: a palette() with clear roles (60% main, 30% secondary, 10% accent); gradients from
+              heavy/dark/mossy at the base to light at the top; partial blocks (stairs, slabs, walls, trapdoors,
+              fences) to soften edges and add micro-detail; shade() on every organic mass.
+            - Order: primary masses and proportions -> secondary forms (roofs, limbs, towers, wings) -> details
+              (trim, lights, props, plants). Never polish a weak silhouette.
+            - Scale for detail: house 20-40 across, mansion or temple 30-60, castle 60-140, statue/creature 25-80
+              (a "small" subject is small for its kind, still big enough to carry detail). Explicit sizes are exact.
+            - Function where it applies: working doors, furnished lit rooms, stairs/ladders between floors,
+              headroom >= 3. Sculptures and objects need no rooms.
+            - Build everything the request names; a requested scene is a scene.
+            """;
+
     private static final String CONTRACT = """
             # ANSWER FORMAT
             Answer with ONE ```js code block containing the complete script, and nothing outside it.
@@ -74,23 +113,48 @@ public final class ScriptPrompts {
             Scripts are re-run deterministically; random choices come from the seeded rng().
             """;
 
-    /** System prompt for every script call; {@code blockList} is appended when configured. */
+    /** System prompt of the latest library. */
     public static String system(String blockList) {
+        return system(Stdlib.latest(), blockList);
+    }
+
+    /** System prompt for every script call against {@code lib}; {@code blockList} is appended when configured. */
+    public static String system(Stdlib lib, String blockList) {
         return HEAD + "\n" + Prompts.blockStateRules()
                 + "\n- Kits (door, windowAt, roof, stairs, column, chair...) orient their blocks for you: prefer them.\n\n"
-                + CRAFT + "\n" + API_CARD + "\n" + CONTRACT + "\n# EXAMPLES (style reference only; do not copy)\n" + EXAMPLES
+                + (lib == Stdlib.V1 ? CRAFT : CRAFT_V2) + "\n" + lib.apiCard() + "\n" + CONTRACT + "\n# EXAMPLES (style reference only; do not copy)\n" + examples(lib)
                 + (blockList == null || blockList.isBlank() ? "" : "\n# VALID BLOCK IDS (Minecraft Java 26.3 — use ONLY these)\n" + blockList);
     }
 
     /** First construction request. {@code scale} describes the block budget of the mode. */
     public static String create(String request, String scale) {
+        return create(Stdlib.V1, request, scale);
+    }
+
+    /** First construction request against {@code lib}, with its expert recipe cards for this kind of subject. */
+    public static String create(Stdlib lib, String request, String scale) {
+        if (lib == Stdlib.V1) {
+            return """
+                    BUILD REQUEST: "%s"
+
+                    Write the complete build script. %s
+                    Think about the subject's real appearance from every side before writing code, then write the script
+                    directly (do not enumerate coordinates in your thoughts — compute them in code).
+                    """.formatted(Prompts.escape(request), scale);
+        }
+        String recipes = Recipes.forRequest(lib, request);
         return """
                 BUILD REQUEST: "%s"
 
-                Write the complete build script. %s
-                Think about the subject's real appearance from every side before writing code, then write the script
-                directly (do not enumerate coordinates in your thoughts — compute them in code).
-                """.formatted(Prompts.escape(request), scale);
+                %s
+
+                Before writing code, plan in your head (briefly, no coordinate lists):
+                1. The 3-5 traits that make this subject unmistakable, and how it looks from every side.
+                2. The parts with their sizes and how they connect; which kits build each part.
+                3. The setting that frames it, and the focal areas that get the most detail.
+                4. How you avoid the failure modes (flat walls, visible primitives, single-block surfaces).
+                Then write the complete build script. %s
+                """.formatted(Prompts.escape(request), recipes.isBlank() ? "" : recipes, scale);
     }
 
     /** Asks for a corrected full script after a failed run. */
@@ -149,6 +213,56 @@ public final class ScriptPrompts {
                 parts, evidence, dev.aibuild.script.ScriptPatch.numbered(script));
     }
 
+    /**
+     * The art director looks at the renders and names the parts whose rewrite would improve the build most, with a
+     * concrete brief for each sculptor.
+     */
+    public static String director(String request, String parts, String evidence, int max) {
+        return """
+                BUILD REQUEST: "%s"
+                You are the art director of this build. The attached image shows it from four sides, at eye level and
+                from the top. Decide which parts would gain the most from a master builder's rework: weak or stiff
+                silhouettes, flat walls or single-block surfaces, visible primitives, missing signature details of the
+                subject, and above all the focal areas (faces, entrances, crowns, rooflines, joints). Parts that carry
+                the subject matter more than scenery. Pick at most %d parts by their exact names from the list; never
+                pick a part together with a part nested inside it ('house' and 'house/roof'): the whole subject or its
+                weakest pieces. Each brief goes only to that part's sculptor, so name the right part. When scenery
+                swamps the subject (a huge plot, trees hiding it), brief the scenery part to shrink and clear the view.
+                For each, write a concrete brief: what is wrong, what to build instead (forms, depth layers, kits,
+                shading, details), and keep its position and footprint (within about 3 blocks) unless it must grow.
+                Answer with ONE JSON object: {"parts":[{"name":"...","brief":"..."}]} (an empty list if nothing would gain).
+                PARTS (name: blocks and bounds):
+                %s
+                AUTOMATIC ANALYSIS:
+                %s""".formatted(Prompts.escape(request), max, parts, evidence);
+    }
+
+    /** A sculptor rewrites one part() statement at a higher level of craft. */
+    public static String sculptor(String request, String name, String bounds, String brief, String partSource,
+                                  String script, boolean image) {
+        return """
+                BUILD REQUEST: "%s"
+                You are a master builder. Rewrite ONE part of this build: part('%s'), currently %s (world coordinates).
+                The rest of the build stays as it is, so keep this part where it is and connected to its neighbours
+                (stay within about 3 blocks of its current bounds unless the brief asks for more).
+                ART DIRECTOR'S BRIEF: %s
+                %s
+                Raise the craft a lot: real depth layers, sculpted forms instead of boxes, texture and shade() on
+                surfaces, partial blocks (stairs, slabs, walls, trapdoors, fences) for micro-detail, the subject's
+                signature details. Keep what already works. You may use the script's top-level variables and functions.
+                Answer with ONE ```js block that contains only the complete replacement statement
+                part('%s', () => { ... }); — define any helpers inside it.
+
+                CURRENT PART:
+                ```js
+                %s
+                ```
+                WHOLE SCRIPT (read-only context):
+                %s""".formatted(Prompts.escape(request), name, bounds, brief,
+                image ? "The attached image shows close-ups of this part in the build." : "", name, partSource,
+                dev.aibuild.script.ScriptPatch.numbered(script));
+    }
+
     /** A user's change request against the stored script of the current version. */
     public static String edit(String original, String change, String script, String evidence, String parts, boolean image) {
         return """
@@ -191,14 +305,5 @@ public final class ScriptPrompts {
     /** Canary that checks the gateway really delivers images to the model. */
     public static String visionProbe() {
         return "What number is written in the image? Answer with the digits only.";
-    }
-
-    private static String resource(String path) {
-        try (InputStream in = ScriptPrompts.class.getResourceAsStream(path)) {
-            if (in == null) throw new IllegalStateException("missing resource " + path);
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new IllegalStateException("cannot read " + path, e);
-        }
     }
 }

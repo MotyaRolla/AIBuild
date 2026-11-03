@@ -30,6 +30,12 @@ class ScriptRuntimeTest {
         assertEquals("lantern", r.model().get(2, 5, 2).name());
     }
 
+    @Test void bareWoodNamesMeanPlanks() {
+        ScriptResult r = run("block(0,1,0, stair('dark_oak', 'north'));");
+        assertTrue(r.ok(), () -> r.error().describe());
+        assertEquals("dark_oak_stairs", r.model().get(0, 1, 0).name());
+    }
+
     @Test void dialectGapsAreRewrittenOrExplained() {
         ScriptResult ok = run("var s = 0; for (const v of [1,2,3]) { s += v; } box(0,1,0,s,1,0,'stone');");
         assertTrue(ok.ok(), () -> ok.error().describe());
@@ -225,17 +231,17 @@ class ScriptRuntimeTest {
         assertTrue(bad.error().message().contains("radius"), bad.error().message());
     }
 
-    @Test void promptExamplesRunCleanly() throws Exception {
-        for (String name : new String[]{"cottage", "fox", "bridge"}) {
-            String src;
-            try (var in = getClass().getResourceAsStream("/stdlib/examples/" + name + ".js")) {
-                src = new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+    @Test void promptExamplesRunCleanly() {
+        for (Stdlib lib : new Stdlib[]{Stdlib.V1, Stdlib.V2}) {
+            ScriptRuntime rt = new ScriptRuntime(new StubBlockInfo(), lib);
+            for (String name : lib.examples()) {
+                String src = lib.example(name);
+                ScriptResult r = rt.run(src, 7, null, null, ScriptRuntime.Budget.standard(), null);
+                assertTrue(r.ok(), () -> lib + " " + name + ": " + r.error().describe());
+                assertTrue(r.warnings().isEmpty(), lib + " " + name + ": " + r.warnings());
+                assertTrue(r.model().nonAirCount() > 800, lib + " " + name + " blocks=" + r.model().nonAirCount());
+                assertTrue(dev.aibuild.pipeline.ScriptPrompts.system(lib, null).contains(src.strip()), name + " is shown to the model");
             }
-            ScriptResult r = run(src);
-            assertTrue(r.ok(), () -> name + ": " + r.error().describe());
-            assertTrue(r.warnings().isEmpty(), name + ": " + r.warnings());
-            assertTrue(r.model().nonAirCount() > 800, name + " blocks=" + r.model().nonAirCount());
-            assertTrue(dev.aibuild.pipeline.ScriptPrompts.system(null).contains(src.strip()), name + " is shown to the model");
         }
     }
 }

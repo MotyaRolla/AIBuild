@@ -36,7 +36,7 @@ generation:
   repair-failed-ops: true    # ask the AI to fix ops that failed (bad block names etc.)
   live-preview: true         # place intermediate results so players watch the build grow
   max-concurrent-jobs: 2
-  max-extent: 96             # max size of a build along any axis
+  max-extent: 160            # max size of a build along any axis (half-size around the plot centre)
   distance: 3                # gap between the player and the build front
   include-block-list: true   # send the full 26.3 block list to the model (better validity)
 
@@ -55,13 +55,30 @@ script:
   critic-rounds:
     fast: 0
     light: 1
-    standard: 2
-    extra: 3
+    standard: 1
+    extra: 2
+  # seconds into a build after which the critic rounds are skipped (unless the build has critical defects), so a
+  # build finishes in time; 0 = always run them
+  review-deadline:
+    fast: 0
+    light: 0
+    standard: 780
+    extra: 0
+  # after the best candidate is chosen, an art director looks at the renders and picks the parts that would gain
+  # most from more work (face, entrance, roof...); that many sculptors rewrite one part each in parallel, seeing a
+  # close-up of it. The rewrite is kept only if it runs, adds no analyzer defects and the judge does not prefer
+  # the old build.
+  sculptors:
+    fast: 0
+    light: 0
+    standard: 3
+    extra: 5
+  sculpt-effort: low         # reasoning of the art director and the sculptors
 
 vision:
   enabled: true              # send renders to the AI (checked once per session with a test image)
   judge: true                # pairwise visual judge for candidate selection and accepting critic revisions
-  image-size: 1024           # longest side of each render sheet in pixels
+  image-size: 1536           # width of each render sheet in pixels (3 x 2 textured views)
   judge-effort: low          # reasoning per judge call (two calls per comparison, sides swapped)
 
 # Thinking modes. Players pick one with /aib mode <id>, or per request: /aib create --mode extra ...
@@ -99,13 +116,13 @@ modes:
     title: "Стандарт"
     eta: "время зависит от сложности"
     plan: "off"
-    build: low
+    build: medium
     review: low
     review-followup: low
     edit: low
     verify-rounds: 3
     edit-verify-rounds: 1
-    max-tokens: 60000
+    max-tokens: 120000
     parallel-review: false
   extra:
     title: "Экстра-думание"

@@ -32,11 +32,24 @@ class TextureCacheTest {
             png(z, "assets/minecraft/textures/block/oak_leaves.png", 0x909090);
             png(z, "assets/minecraft/textures/block/stone_bricks.png", 0x7A7A7A);
         }
-        Map<String, Integer> c = TextureCache.fromClientJar(jar);
+        TextureCache.Assets assets = TextureCache.fromClientJar(jar);
+        Map<String, Integer> c = assets.colours();
         assertEquals(0xA0824E, c.get("oak_stairs"));
         assertEquals(0x7A7A7A, c.get("stone_brick_wall"), "multipart blockstates resolve through #references");
         int leaves = c.get("oak_leaves");
         assertTrue(((leaves >> 8) & 255) > ((leaves >> 16) & 255), "grey leaf texture is tinted green");
+
+        BlockTextures t = assets.textures();
+        assertEquals(3, t.tileCount(), "one tile per distinct texture");
+        int[] stairs = t.faces("oak_stairs");
+        assertEquals(0xFFA0824E, t.sample(stairs[1], 0.5, 0.5, 0), "the 4px texture is scaled to a 16px tile");
+        int leaf = t.sample(t.faces("oak_leaves")[0], 0.1, 0.9, 2);
+        assertTrue(((leaf >> 8) & 255) > ((leaf >> 16) & 255), "tiles carry the tint too");
+
+        TextureCache.save(dir, assets);
+        BlockTextures back = BlockTextures.load(dir);
+        assertArrayEquals(stairs, back.faces("oak_stairs"));
+        assertEquals(t.sample(stairs[0], 0.3, 0.7, 0), back.sample(back.faces("oak_stairs")[0], 0.3, 0.7, 0));
     }
 
     private static void put(ZipOutputStream z, String name, String text) throws Exception {

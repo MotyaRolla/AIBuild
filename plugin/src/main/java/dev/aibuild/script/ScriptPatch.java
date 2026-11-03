@@ -87,6 +87,28 @@ public final class ScriptPatch {
         return hit;
     }
 
+    /**
+     * Replaces the {@code part('name', ...)} statement of {@code source} with {@code replacement} (which must
+     * itself be a part('name', ...) statement, usually a sculptor's rewrite). The replacement may be a whole
+     * answer: its fenced code is used.
+     */
+    public static Result replacePart(String source, String name, String replacement) {
+        String code = ScriptLint.extract(replacement);
+        if (code.isBlank()) code = replacement == null ? "" : replacement.strip();
+        int[] at = ScriptLint.partSpan(source, name);
+        if (at == null) return new Result(source, "the script has no part('" + name + "')", 0, false);
+        int[] mine = ScriptLint.partSpan(code, name);
+        if (mine == null) return new Result(source, "the rewrite must be one part('" + name + "', () => { ... }) call", 0, false);
+        // only the part statement itself: top-level helpers around it could redeclare names of the script
+        return new Result(source.substring(0, at[0]) + code.substring(mine[0], mine[1]) + source.substring(at[1]), null, 1, false);
+    }
+
+    /** The source text of one part() statement, or null. */
+    public static String partSource(String source, String name) {
+        int[] at = ScriptLint.partSpan(source, name);
+        return at == null ? null : source.substring(at[0], at[1]);
+    }
+
     /** The script with 1-based line numbers, for prompts that ask for hunks. */
     public static String numbered(String source) {
         String[] lines = source.split("\n", -1);

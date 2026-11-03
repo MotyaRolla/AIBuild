@@ -51,38 +51,45 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * are integer handles, so no Java object ever reaches script code. An instruction observer enforces the
  * instruction, wall-clock, allocation and cancellation budget.</p>
  *
- * <p><b>Library.</b> {@code stdlib/prelude.js} defines the API the model sees (shapes, materials, kits) on top
+ * <p><b>Library.</b> The {@link Stdlib} prelude ({@code stdlib/v<n>/prelude.js}) defines the API the model sees (shapes, materials, kits) on top
  * of the {@code __*} host functions registered here. Heavy work (distance-field sampling, smoothing, legacy
  * ops) runs in Java.</p>
  */
 public final class ScriptRuntime {
-    /** Bumped whenever the prelude or host semantics change, so stored scripts can be re-run knowingly. */
-    public static final String STDLIB_VERSION = "2.0.0";
     public static final String SCRIPT_NAME = "build.js";
     private static final String PRELUDE_NAME = "prelude.js";
-    private static final String PRELUDE = resource("/stdlib/prelude.js");
 
     private static final SandboxFactory FACTORY = new SandboxFactory();
-    /** Global names the prelude defines, for "did you mean" hints. */
-    public static final java.util.Set<String> API = apiNames();
 
     /** Per-run limits. */
     public record Budget(long instructions, long millis, long allocatedBytes, int maxCells, long samples) {
         public static Budget standard() {
-            return new Budget(200_000_000L, 25_000, 6L << 30, 900_000, 400_000_000L);
+            return new Budget(300_000_000L, 40_000, 8L << 30, 1_500_000, 600_000_000L);
         }
 
         public static Budget extra() {
-            return new Budget(500_000_000L, 60_000, 12L << 30, 1_400_000, 1_000_000_000L);
+            return new Budget(700_000_000L, 80_000, 16L << 30, 2_500_000, 1_400_000_000L);
         }
     }
 
     private final BlockInfo info;
     private final BlockFamilies families;
+    private final Stdlib stdlib;
 
+    /** A runtime with the latest library. */
     public ScriptRuntime(BlockInfo info) {
+        this(info, Stdlib.latest());
+    }
+
+    /** A runtime with a specific library version (stored builds re-run with the library they were written for). */
+    public ScriptRuntime(BlockInfo info, Stdlib stdlib) {
         this.info = Objects.requireNonNull(info, "info");
         this.families = new BlockFamilies(info);
+        this.stdlib = Objects.requireNonNull(stdlib, "stdlib");
+    }
+
+    public Stdlib stdlib() {
+        return stdlib;
     }
 
     public BlockFamilies families() {
@@ -113,7 +120,7 @@ public final class ScriptRuntime {
             cx.putThreadLocal(Run.class, run);
             ScriptableObject scope = cx.initSafeStandardObjects(null, false);
             install(cx, scope, run);
-            cx.evaluateString(scope, PRELUDE, PRELUDE_NAME, 1, null);
+            cx.evaluateString(scope, stdlib.prelude(), PRELUDE_NAME, 1, null);
             libraryLoaded = true;
             if (pre != null) error = pre;
             else cx.evaluateString(scope, prepared, SCRIPT_NAME, 1, null);
@@ -139,7 +146,7 @@ public final class ScriptRuntime {
             // Not the script's fault: repairing it cannot help, so the caller falls back instead of retrying.
             throw new IllegalStateException("the build-script library failed to load: " + error.message());
         }
-        error = ScriptLint.explain(error, prepared, API);
+        error = ScriptLint.explain(error, prepared, stdlib.api());
         Canvas c = run.canvas;
         return new ScriptResult(c.model(), error, run.meta, c.parts(), c.owners(), c.smoothed(), List.copyOf(run.logs),
                 merge(c.warnings(), c.outside()), c.outside(), run.instructions, System.currentTimeMillis() - start,
@@ -263,6 +270,8 @@ public final class ScriptRuntime {
                 }
                 return new Material.Fixed(info.parse(raw));
             } catch (IllegalArgumentException e) {
+                // a bare wood name ('dark_oak') means its planks, as in stair('dark_oak', ...)
+                if (raw.matches("[a-z_]+") && families.exists(raw + "_planks")) return new Material.Fixed(info.parse(raw + "_planks"));
                 throw new IllegalArgumentException(e.getMessage() + suggest(raw));
             }
         }
@@ -414,6 +423,11 @@ public final class ScriptRuntime {
             return out;
         });
         fn(scope, "__exists", 1, (c, s, a) -> families.exists(BlockSpec.parseRaw(Context.toString(a[0])).name()));
+        fn(scope, "__ramp", 3, (c, s, a) -> {
+            String base = a[0] instanceof String str ? str : run.material(a[0]).representative().name();
+            List<String> r = Ramps.ramp(base, (int) num(a[1]), num(a[2]), info);
+            return c.newArray(s, r.toArray());
+        });
         fn(scope, "__door", 4, (c, s, a) -> {
             double[] p = run.canvas.frame().point(num(a[0]), num(a[1]), num(a[2]));
             BlockSpec door = run.canvas.orient(run.material(a[3]).representative());
@@ -587,6 +601,16 @@ public final class ScriptRuntime {
             }
             case "weather" -> new Material.Weather(run.material(get(o, "of")), Math.clamp(num(get(o, "amount")), 0, 1), run.noise, families);
             case "trim" -> new Material.Trim(run.material(get(o, "of")), run.material(get(o, "edge")));
+            case "shade" -> {
+                List<Material> ramp = new ArrayList<>();
+                for (Object m : list(get(o, "of"))) ramp.add(run.material(m));
+                if (ramp.size() < 2) throw new IllegalArgumentException("shade() needs a ramp of 2+ blocks, dark to light");
+                double[] l = has(o, "light") ? nums(get(o, "light")) : new double[]{-0.35, 0.85, 0.4};
+                double len = Math.sqrt(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]);
+                if (l.length != 3 || len < 1e-9) throw new IllegalArgumentException("shade() light must be [x, y, z]");
+                yield new Material.Shade(ramp, new double[]{l[0] / len, l[1] / len, l[2] / len},
+                        has(o, "height") ? num(get(o, "height")) : 0.25, has(o, "cavity") ? num(get(o, "cavity")) : 0.9, run.noise);
+            }
             default -> throw new IllegalArgumentException("unknown material type '" + t + "'");
         };
     }
@@ -732,29 +756,7 @@ public final class ScriptRuntime {
         return new JsonPrimitive(Context.toString(o));
     }
 
-    private static String resource(String path) {
-        try (InputStream in = ScriptRuntime.class.getResourceAsStream(path)) {
-            if (in == null) throw new IllegalStateException("missing resource " + path);
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new IllegalStateException("cannot read " + path, e);
-        }
-    }
 
-    private static java.util.Set<String> apiNames() {
-        java.util.Set<String> out = new java.util.TreeSet<>();
-        java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?m)^(?:function|var)\\s+([A-Za-z][\\w$]*)").matcher(PRELUDE);
-        while (m.find()) out.add(m.group(1));
-        m = java.util.regex.Pattern.compile("(?m)^\\s{4}([a-zA-Z]\\w*): function").matcher(PRELUDE);
-        while (m.find()) out.add(m.group(1));
-        out.addAll(List.of("Math", "JSON", "Object", "Array", "String", "Number", "SEED", "parseInt", "parseFloat", "isNaN"));
-        return java.util.Set.copyOf(out);
-    }
-
-    /** The bundled prelude source (shown to the model on demand for kit internals). */
-    public static String prelude() {
-        return PRELUDE;
-    }
 
     private static final class SandboxFactory extends ContextFactory {
         @Override

@@ -137,6 +137,87 @@ public final class ScriptLint {
         return new Partial(code.substring(0, cut), part);
     }
 
+    /**
+     * Source span {start, end} of the statement {@code part('name', ...)} (with its trailing semicolon), or null
+     * when the script has no such call. Brackets inside strings, comments and regexes are ignored.
+     */
+    public static int[] partSpan(String source, String name) {
+        Matcher m = PART_NAME.matcher(source);
+        while (m.find()) {
+            if (!m.group(1).equals(name) || inCommentOrString(source, m.start())) continue;
+            int open = source.indexOf('(', m.start());
+            int end = matchParen(source, open);
+            if (end < 0) return null;
+            int j = end;
+            while (j < source.length() && (source.charAt(j) == ' ' || source.charAt(j) == '\t')) j++;
+            if (j < source.length() && source.charAt(j) == ';') end = j + 1;
+            return new int[]{m.start(), end};
+        }
+        return null;
+    }
+
+    /** Names of all part() calls written in the script, in source order. */
+    public static java.util.List<String> partNames(String source) {
+        java.util.List<String> out = new java.util.ArrayList<>();
+        Matcher m = PART_NAME.matcher(source);
+        while (m.find()) if (!inCommentOrString(source, m.start()) && !out.contains(m.group(1))) out.add(m.group(1));
+        return out;
+    }
+
+    /** Index just after the parenthesis matching the one at {@code open}, or -1. */
+    private static int matchParen(String s, int open) {
+        int depth = 0, n = s.length();
+        char prev = '(';
+        for (int i = open; i < n; ) {
+            char c = s.charAt(i);
+            if (c == '/' && i + 1 < n && s.charAt(i + 1) == '/') {
+                while (i < n && s.charAt(i) != '\n') i++;
+            } else if (c == '/' && i + 1 < n && s.charAt(i + 1) == '*') {
+                int e = s.indexOf("*/", i + 2);
+                if (e < 0) return -1;
+                i = e + 2;
+            } else if (c == '"' || c == '\'' || c == '`') {
+                i = skipQuoted(s, i, c);
+                prev = c;
+            } else if (c == '/' && "(,=:[!&|?{};+-*%<>~^".indexOf(prev) >= 0) {
+                i = skipRegex(s, i);
+                prev = '/';
+            } else {
+                if ("([{".indexOf(c) >= 0) depth++;
+                else if (")]}".indexOf(c) >= 0 && --depth == 0) return i + 1;
+                if (!Character.isWhitespace(c)) prev = Character.isJavaIdentifierPart(c) ? 'a' : c;
+                i++;
+            }
+        }
+        return -1;
+    }
+
+    private static boolean inCommentOrString(String s, int pos) {
+        int n = Math.min(pos, s.length());
+        char prev = 0;
+        for (int i = 0; i < n; ) {
+            char c = s.charAt(i);
+            if (c == '/' && i + 1 < s.length() && s.charAt(i + 1) == '/') {
+                int e = s.indexOf('\n', i);
+                if (e < 0 || e > pos) return true;
+                i = e;
+            } else if (c == '/' && i + 1 < s.length() && s.charAt(i + 1) == '*') {
+                int e = s.indexOf("*/", i + 2);
+                if (e < 0 || e + 2 > pos) return true;
+                i = e + 2;
+            } else if (c == '"' || c == '\'' || c == '`') {
+                int e = skipQuoted(s, i, c);
+                if (e > pos) return true;
+                i = e;
+                prev = c;
+            } else {
+                if (!Character.isWhitespace(c)) prev = c;
+                i++;
+            }
+        }
+        return false;
+    }
+
     private static int skipQuoted(String s, int i, char q) {
         for (i++; i < s.length(); i++) {
             char c = s.charAt(i);

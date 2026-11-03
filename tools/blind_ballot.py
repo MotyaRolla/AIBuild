@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Blind human A/B ballot for `/aib bench create` results, and its tally.
 
-Make a ballot from any number of bench folders (each holds strategy-compiled.png and strategy-script.png):
+Make a ballot from any number of bench folders (each holds the two renders strategy-<variant>.png; the variant
+names come from bench.json "a"/"b", e.g. script-v2 and script-v3; older folders compare compiled and script):
     python3 tools/blind_ballot.py make bench/bench-1a2b3c bench/bench-4d5e6f ... --output bench/ballot-20261103
 Open bench/ballot-20261103/ballot.html, vote on every pair (left / right / tie), press "Export votes" and save
 the JSON next to the ballot. Then:
@@ -19,7 +20,14 @@ import math
 import secrets
 from pathlib import Path
 
-STRATEGIES = ("compiled", "script")
+LEGACY = ("compiled", "script")
+
+
+def variants(folder):
+    meta = json.loads((folder / "bench.json").read_text()) if (folder / "bench.json").is_file() else {}
+    if "a" in meta and "b" in meta:
+        return meta["a"], meta["b"]
+    return LEGACY
 
 
 def make(args):
@@ -28,12 +36,13 @@ def make(args):
     rnd = secrets.SystemRandom()
     pairs, mapping = [], {}
     for folder in args.benches:
-        files = {s: folder / f"strategy-{s}.png" for s in STRATEGIES}
+        names = variants(folder)
+        files = {s: folder / f"strategy-{s}.png" for s in names}
         if not all(f.is_file() for f in files.values()):
-            print(f"skip {folder}: both strategy renders are needed")
+            print(f"skip {folder}: both renders are needed (one variant failed?)")
             continue
         meta = json.loads((folder / "bench.json").read_text()) if (folder / "bench.json").is_file() else {}
-        order = list(STRATEGIES)
+        order = list(names)
         rnd.shuffle(order)
         pid = f"p{len(pairs) + 1:03d}"
         mapping[pid] = {"bench": str(folder), "left": order[0], "right": order[1]}
@@ -95,20 +104,25 @@ def sign_test(wins, losses):
 def tally(args):
     mapping = json.loads((args.ballot / "mapping.private.json").read_text())
     votes = json.loads(args.votes.read_text())
-    wins = {s: 0 for s in STRATEGIES}
+    wins = {}
     ties = 0
     for pid, v in votes.items():
         m = mapping.get(pid)
         if not m:
             continue
+        for side in ("left", "right"):
+            wins.setdefault(m[side], 0)
         if v == "tie":
             ties += 1
         elif v in ("left", "right"):
             wins[m[v]] += 1
-    a, b = wins["script"], wins["compiled"]
-    print(f"script {a} : compiled {b}  (ties {ties}, pairs {len(votes)})")
+    if len(wins) != 2:
+        print("the ballot must compare exactly two variants:", sorted(wins))
+        return
+    (na, a), (nb, b) = sorted(wins.items(), key=lambda kv: -kv[1])
+    print(f"{na} {a} : {nb} {b}  (ties {ties}, pairs {len(votes)})")
     if a + b:
-        print(f"script preferred in {a / (a + b):.0%} of decided pairs; exact two-sided sign test p = {sign_test(a, b):.4f}")
+        print(f"{na} preferred in {a / (a + b):.0%} of decided pairs; exact two-sided sign test p = {sign_test(a, b):.4f}")
     if a + b < 30:
         print("fewer than 30 decided pairs: not enough to claim a preference")
 

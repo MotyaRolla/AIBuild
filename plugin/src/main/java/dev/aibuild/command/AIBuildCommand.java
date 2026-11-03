@@ -390,7 +390,7 @@ public final class AIBuildCommand implements BasicCommand {
                 File dir = new File(plugin.getDataFolder(), "renders");
                 dir.mkdirs();
                 File f = new File(dir, b.id + "-v" + ver + ".png");
-                IsoRenderer.writePng(IsoRenderer.renderSheet(copy, plugin.blockInfo(), 14), f);
+                IsoRenderer.writePng(dev.aibuild.render.ContactSheet.overview(copy, plugin.blockInfo(), 2400), f);
                 Msg.send(s, "<gray>Рендер сохранён: <white><v0></white></gray>", "plugins/AIBuild/renders/" + f.getName());
             } catch (Exception e) {
                 Msg.send(s, "<red>Ошибка рендера: <v0></red>", String.valueOf(e.getMessage()));
@@ -513,17 +513,37 @@ public final class AIBuildCommand implements BasicCommand {
     private void bench(CommandSender s, String[] a0) {
         if (!s.hasPermission("aibuild.admin")) throw new IllegalStateException("Нет прав.");
         requireKey();
-        if (a0.length < 2) throw new IllegalArgumentException("/aib bench create|review [--mode m] <промпт> | /aib bench edit <id> [--mode m] <правка>");
+        if (a0.length < 1 || (a0.length < 2 && !a0[0].equalsIgnoreCase("suite"))) {
+            throw new IllegalArgumentException("/aib bench create [--mode m] [--a v] [--b v] <промпт> | /aib bench suite [--mode m] [--a v] [--b v] [--repeat n] "
+                    + "| /aib bench review [--mode m] <промпт> | /aib bench edit <id> [--mode m] <правка>");
+        }
         String kind = a0[0].toLowerCase(Locale.ROOT);
         ModeArgs ma = stripMode(Arrays.copyOfRange(a0, 1, a0.length));
         BuildMode mode = ma.mode() != null ? ma.mode() : plugin.modeOf(s instanceof Player p ? p.getUniqueId() : null);
         String[] a = ma.rest();
+        String va = "script-v2", vb = "script-v3";
+        int repeat = 1;
+        java.util.List<String> rest = new java.util.ArrayList<>();
+        for (int i = 0; i < a.length; i++) {
+            if ((a[i].equals("--a") || a[i].equals("--b") || a[i].equals("--repeat")) && i + 1 < a.length) {
+                if (a[i].equals("--a")) va = a[++i].toLowerCase(Locale.ROOT);
+                else if (a[i].equals("--b")) vb = a[++i].toLowerCase(Locale.ROOT);
+                else repeat = Math.clamp(Integer.parseInt(a[++i]), 1, 5);
+            } else {
+                rest.add(a[i]);
+            }
+        }
+        a = rest.toArray(String[]::new);
         String id;
         if (kind.equals("create")) {
             String prompt = String.join(" ", a).trim();
             if (prompt.isEmpty()) throw new IllegalArgumentException("Нужен промпт.");
-            id = plugin.pipeline().startCreateBench(prompt, mode);
-            Msg.send(s, "<gray>Бенчмарк создания <white><v0></white> (режим <v1>): классический (compiled) и скриптовый конвейер параллельно, рендеры для слепого сравнения.</gray>", id, mode.title);
+            id = plugin.pipeline().startCreateBench(prompt, mode, va, vb);
+            Msg.send(s, "<gray>Бенчмарк создания <white><v0></white> (режим <v1>): <v2> и <v3> параллельно, рендеры для слепого сравнения.</gray>", id, mode.title, va, vb);
+        } else if (kind.equals("suite")) {
+            int n = plugin.pipeline().startBenchSuite(mode, va, vb, repeat);
+            Msg.send(s, "<gray>Набор бенчмарков (режим <v0>): <v1> запросов по очереди, <v2> против <v3>. Папки появятся в plugins/AIBuild/bench/.</gray>",
+                    mode.title, n, va, vb);
         } else if (kind.equals("review")) {
             String prompt = String.join(" ", a).trim();
             if (prompt.isEmpty()) throw new IllegalArgumentException("Нужен промпт.");
@@ -537,7 +557,7 @@ public final class AIBuildCommand implements BasicCommand {
             id = plugin.pipeline().startEditBench(b, change, mode);
             Msg.send(s, "<gray>Бенчмарк правки <white><v0></white> на <v1> (режим <v2>): direct+fixed vs planned+adaptive, затем слепой судья.</gray>", id, b.id, mode.title);
         } else {
-            throw new IllegalArgumentException("Тип бенчмарка: create | review | edit");
+            throw new IllegalArgumentException("Тип бенчмарка: create | suite | review | edit");
         }
     }
 

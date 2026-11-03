@@ -20,9 +20,14 @@ public interface Material {
     /**
      * Where a cell sits. {@code nx, ny, nz} is the outward surface normal when the cell lies on a shape surface
      * (all zero otherwise); {@code bounds} are the placed shape's cell bounds {minX,minY,minZ,maxX,maxY,maxZ};
-     * {@code edge} marks cells on a crease of the surface.
+     * {@code edge} marks cells on a crease of the surface; {@code occ} is how enclosed the surface point is
+     * (about 0.5 on a flat surface, more in creases and hollows, less on ridges and tips; 0.5 when unknown).
      */
-    record Sample(int x, int y, int z, double nx, double ny, double nz, int[] bounds, boolean edge) {
+    record Sample(int x, int y, int z, double nx, double ny, double nz, int[] bounds, boolean edge, double occ) {
+        public Sample(int x, int y, int z, double nx, double ny, double nz, int[] bounds, boolean edge) {
+            this(x, y, z, nx, ny, nz, bounds, edge, 0.5);
+        }
+
         public static Sample at(int x, int y, int z) {
             return new Sample(x, y, z, 0, 0, 0, null, false);
         }
@@ -148,6 +153,38 @@ public interface Material {
         @Override
         public BlockSpec representative() {
             return base.representative();
+        }
+    }
+
+    /**
+     * Sculptural shading: picks a step of a dark-to-light {@code ramp} per cell from how the surface faces the
+     * light (wrapped Lambert), its height within the shape (darker toward the ground) and how enclosed it is
+     * (creases darker, ridges lighter), with a dithered transition between steps — the way builders shade statues.
+     */
+    record Shade(List<Material> ramp, double[] light, double heightWeight, double cavityWeight, Noise noise) implements Material {
+        @Override
+        public BlockSpec pick(Sample s) {
+            int n = ramp.size();
+            double v;
+            if (s.hasNormal()) {
+                double lam = (s.nx() * light[0] + s.ny() * light[1] + s.nz() * light[2] + 1) / 2;
+                v = 0.62 * lam + 0.38 * 0.5;
+            } else {
+                v = 0.45;
+            }
+            if (s.bounds() != null && s.bounds()[4] > s.bounds()[1]) {
+                double t = (s.y() - s.bounds()[1]) / (double) (s.bounds()[4] - s.bounds()[1]);
+                v += heightWeight * (t - 0.5);
+            }
+            v -= cavityWeight * (s.occ() - 0.5);
+            double dither = (noise.uniform(s.x() / 1.7 + 11, s.y() / 1.7 - 5, s.z() / 1.7 + 3) - 0.5) / Math.max(2, n - 1);
+            int i = (int) Math.floor(Math.clamp(v + dither, 0, 0.9999) * n);
+            return ramp.get(i).pick(s);
+        }
+
+        @Override
+        public BlockSpec representative() {
+            return ramp.get(ramp.size() / 2).representative();
         }
     }
 

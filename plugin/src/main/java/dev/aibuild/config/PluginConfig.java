@@ -19,6 +19,16 @@ public final class PluginConfig {
         return criticRounds.getOrDefault(mode, 1);
     }
 
+    /** Seconds into a job after which critic rounds are skipped unless the build has critical defects (0 = never). */
+    public int reviewDeadline(String mode) {
+        return reviewDeadline.getOrDefault(mode, 0);
+    }
+
+    /** Parts rewritten in parallel by sculptor calls after the art director's review (0 = off). */
+    public int sculptors(String mode) {
+        return sculptors.getOrDefault(mode, 0);
+    }
+
     private static Map<String, Integer> perMode(org.bukkit.configuration.ConfigurationSection c, String path,
                                                 Map<String, Integer> defaults, int min, int max) {
         Map<String, Integer> out = new java.util.HashMap<>(defaults);
@@ -52,6 +62,10 @@ public final class PluginConfig {
     public final boolean scriptFallback;
     private final Map<String, Integer> scriptCandidates;
     private final Map<String, Integer> criticRounds;
+    private final Map<String, Integer> reviewDeadline;
+    private final Map<String, Integer> sculptors;
+    /** Reasoning effort of the art director and the part sculptors. */
+    public final String sculptEffort;
     /** Send renders to the model (critic, judge) when the gateway delivers images. */
     public final boolean visionEnabled;
     /** Use the pairwise vision judge to pick candidates and accept critic revisions. */
@@ -130,17 +144,20 @@ public final class PluginConfig {
         scriptRepairAttempts = Math.max(0, Math.min(5, c.getInt("script.repair-attempts", 3)));
         scriptFallback = c.getBoolean("script.fallback-to-ops", true);
         scriptCandidates = perMode(c, "script.candidates", Map.of("fast", 1, "light", 1, "standard", 2, "extra", 3), 1, 5);
-        criticRounds = perMode(c, "script.critic-rounds", Map.of("fast", 0, "light", 1, "standard", 2, "extra", 3), 0, 6);
+        criticRounds = perMode(c, "script.critic-rounds", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 2), 0, 6);
+        reviewDeadline = perMode(c, "script.review-deadline", Map.of("fast", 0, "light", 0, "standard", 780, "extra", 0), 0, 7200);
+        sculptors = perMode(c, "script.sculptors", Map.of("fast", 0, "light", 0, "standard", 3, "extra", 5), 0, 8);
+        sculptEffort = c.getString("script.sculpt-effort", "low");
         visionEnabled = c.getBoolean("vision.enabled", true);
         visionJudge = c.getBoolean("vision.judge", true);
-        visionImageSize = Math.clamp(c.getInt("vision.image-size", 1024), 256, 2048);
+        visionImageSize = Math.clamp(c.getInt("vision.image-size", 1536), 256, 2048);
         visionJudgeEffort = BuildMode.effort(c.getString("vision.judge-effort", "low"));
         adaptiveMaxRounds = Math.max(1, Math.min(12, c.getInt("generation.adaptive-max-rounds", 6)));
         judgeEffort = BuildMode.effort(c.getString("bench.judge-effort", "high"));
         autoOrient = c.getBoolean("generation.auto-orient", true);
         livePreview = c.getBoolean("generation.live-preview", true);
         maxConcurrentJobs = Math.max(1, c.getInt("generation.max-concurrent-jobs", 2));
-        maxExtent = Math.max(8, c.getInt("generation.max-extent", 96));
+        maxExtent = Math.max(8, c.getInt("generation.max-extent", 160));
         distance = Math.max(0, c.getInt("generation.distance", 3));
         includeBlockList = c.getBoolean("generation.include-block-list", true);
         renderTextures = !"off".equalsIgnoreCase(c.getString("render.textures", "auto"));

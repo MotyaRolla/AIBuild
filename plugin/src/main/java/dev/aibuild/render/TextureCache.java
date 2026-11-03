@@ -34,7 +34,8 @@ import java.util.zip.ZipFile;
  * <p>On first use the vanilla client jar is downloaded from Mojang's official launcher metadata
  * ({@code piston-meta.mojang.com}), its sha1 is verified, and every block's blockstate → model → texture chain
  * is resolved to an average colour (alpha-weighted, with the default plains biome tint for grass, foliage
- * and water). Only the derived colour table ({@code colors.json}, a few kilobytes) is kept; the jar is deleted.
+ * and water) and to per-face 16×16 tiles ({@link BlockTextures}). Only the derived tables are kept
+ * ({@code colors.json}, {@code atlas.png} + {@code faces.json}, well under a megabyte); the jar is deleted.
  * The game assets remain Mojang's property and their use is governed by the Minecraft EULA; this mirrors what
  * map renderers such as BlueMap do on the operator's own machine. Disable with {@code render.textures: off}.</p>
  */
@@ -51,24 +52,40 @@ public final class TextureCache {
     private TextureCache() {
     }
 
-    /** Loads {@code colors.json} for {@code version}, building it from the client jar when missing. */
-    public static Map<String, Integer> load(File dataFolder, String version, Logger log) throws IOException, InterruptedException {
+    /** Average colour per block and per-face textures, derived from one client jar. */
+    public record Assets(Map<String, Integer> colours, BlockTextures textures) {
+    }
+
+    /**
+     * Loads the colour table and textures for {@code version}, building them from the client jar when missing
+     * (the jar is downloaded once and deleted afterwards).
+     */
+    public static Assets load(File dataFolder, String version, Logger log) throws IOException, InterruptedException {
         File dir = new File(dataFolder, "textures/" + version);
         File colors = new File(dir, "colors.json");
-        if (colors.isFile()) return read(colors);
+        BlockTextures saved = BlockTextures.load(dir);
+        if (colors.isFile() && saved != null) return new Assets(read(colors), saved);
         Files.createDirectories(dir.toPath());
         File jar = new File(dir, "client.jar.part");
         try {
             download(version, jar, log);
-            Map<String, Integer> table = fromClientJar(jar);
-            JsonObject o = new JsonObject();
-            table.forEach((k, v) -> o.addProperty(k, String.format("%06X", v)));
-            Files.writeString(colors.toPath(), o.toString(), StandardCharsets.UTF_8);
-            log.info("Derived render colours for " + table.size() + " blocks from the Minecraft " + version + " client");
-            return table;
+            Assets assets = fromClientJar(jar);
+            save(dir, assets);
+            log.info("Derived render colours and textures for " + assets.colours().size() + " blocks from the Minecraft "
+                    + version + " client");
+            return assets;
         } finally {
             Files.deleteIfExists(jar.toPath());
         }
+    }
+
+    /** Writes {@code colors.json}, {@code atlas.png} and {@code faces.json} into {@code dir}. */
+    public static void save(File dir, Assets assets) throws IOException {
+        Files.createDirectories(dir.toPath());
+        JsonObject o = new JsonObject();
+        assets.colours().forEach((k, v) -> o.addProperty(k, String.format("%06X", v)));
+        Files.writeString(new File(dir, "colors.json").toPath(), o.toString(), StandardCharsets.UTF_8);
+        assets.textures().save(dir);
     }
 
     private static Map<String, Integer> read(File f) throws IOException {
@@ -126,9 +143,12 @@ public final class TextureCache {
         }
     }
 
-    /** Resolves every blockstate in a client (or resource-pack) zip to an average colour. */
-    public static Map<String, Integer> fromClientJar(File jar) throws IOException {
+    /** Resolves every blockstate in a client (or resource-pack) zip to an average colour and face textures. */
+    public static Assets fromClientJar(File jar) throws IOException {
         Map<String, Integer> out = new HashMap<>();
+        java.util.List<int[]> tiles = new java.util.ArrayList<>();
+        Map<String, Integer> tileIndex = new HashMap<>();
+        Map<String, int[]> faces = new HashMap<>();
         try (ZipFile zip = new ZipFile(jar)) {
             Map<String, JsonObject> models = new HashMap<>();
             Map<String, Integer> textureColours = new HashMap<>();
@@ -152,13 +172,61 @@ public final class TextureCache {
                     if (chosen == null) continue;
                     Integer c = textureColour(zip, textureColours, chosen);
                     if (c != null) out.put(block, c);
+                    int t = tile(zip, tiles, tileIndex, pickTexture(tex, "top", "end", "up", "all", "texture", "cross", "plant",
+                            "wall", "pane", "lantern", "particle"));
+                    int sd = tile(zip, tiles, tileIndex, pickTexture(tex, "side", "all", "texture", "cross", "plant", "wall",
+                            "pane", "north", "front", "lantern", "edge", "particle"));
+                    int bt = tile(zip, tiles, tileIndex, pickTexture(tex, "bottom", "end", "down", "all", "texture", "wall",
+                            "pane", "lantern", "particle"));
+                    if (sd < 0) sd = t >= 0 ? t : bt;
+                    if (sd >= 0) faces.put(block, new int[]{t >= 0 ? t : sd, sd, bt >= 0 ? bt : sd});
                 } catch (RuntimeException ignored) {
                     // a malformed or unusual blockstate keeps the fallback colour
                 }
             }
         }
         out.put("water", TINT.get("water"));
-        return out;
+        return new Assets(out, new BlockTextures(tiles, faces));
+    }
+
+    /** Index of a texture's 16×16 tile (first animation frame, tinted), loading it once; -1 if missing. */
+    private static int tile(ZipFile zip, java.util.List<int[]> tiles, Map<String, Integer> index, String texture) throws IOException {
+        if (texture == null) return -1;
+        Integer known = index.get(texture);
+        if (known != null) return known;
+        int result = -1;
+        ZipEntry e = zip.getEntry("assets/minecraft/textures/" + strip(texture) + ".png");
+        if (e != null) {
+            BufferedImage img;
+            try (InputStream in = zip.getInputStream(e)) {
+                img = ImageIO.read(new ByteArrayInputStream(in.readAllBytes()));
+            }
+            if (img != null && img.getWidth() > 0) {
+                int s = BlockTextures.S, w = img.getWidth();
+                int[] px = new int[s * s];
+                String name = strip(texture).substring(strip(texture).lastIndexOf('/') + 1);
+                for (int y = 0; y < s; y++) {
+                    for (int x = 0; x < s; x++) {
+                        int argb = img.getRGB(x * w / s, Math.min(img.getHeight() - 1, y * w / s));
+                        px[y * s + x] = (argb & 0xFF000000) | tint(name, argb & 0xFFFFFF);
+                    }
+                }
+                result = tiles.size();
+                tiles.add(px);
+            }
+        }
+        index.put(texture, result);
+        return result;
+    }
+
+    /** Applies the default biome tint that the game multiplies onto grey grass, foliage and water textures. */
+    private static int tint(String name, int c) {
+        if (GRASS_TINTED.contains(name)) return multiply(c, TINT.get("grass"));
+        if (FOLIAGE_TINTED.contains(name)) return multiply(c, TINT.get("foliage"));
+        if (name.equals("spruce_leaves")) return multiply(c, TINT.get("spruce"));
+        if (name.equals("birch_leaves")) return multiply(c, TINT.get("birch"));
+        if (name.startsWith("water_")) return multiply(c, TINT.get("water"));
+        return c;
     }
 
     private static String firstModel(JsonObject state) {
@@ -230,12 +298,7 @@ public final class TextureCache {
         }
         if (wsum == 0) return null;
         int c = ((int) (r / wsum) << 16) | ((int) (g / wsum) << 8) | (int) (b / wsum);
-        String name = strip(texture).substring(strip(texture).lastIndexOf('/') + 1);
-        if (GRASS_TINTED.contains(name)) c = multiply(c, TINT.get("grass"));
-        else if (FOLIAGE_TINTED.contains(name)) c = multiply(c, TINT.get("foliage"));
-        else if (name.equals("spruce_leaves")) c = multiply(c, TINT.get("spruce"));
-        else if (name.equals("birch_leaves")) c = multiply(c, TINT.get("birch"));
-        else if (name.startsWith("water_")) c = multiply(c, TINT.get("water"));
+        c = tint(strip(texture).substring(strip(texture).lastIndexOf('/') + 1), c);
         cache.put(texture, c);
         return c;
     }

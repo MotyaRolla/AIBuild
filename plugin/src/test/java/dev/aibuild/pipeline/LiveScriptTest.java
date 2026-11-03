@@ -57,7 +57,7 @@ class LiveScriptTest {
 
     @Test void streamedExampleGrowsPartByPartAndEndsAtTheFinalModel() throws Exception {
         String src;
-        try (InputStream in = getClass().getResourceAsStream("/stdlib/examples/fox.js")) {
+        try (InputStream in = getClass().getResourceAsStream("/stdlib/v2/examples/fox.js")) {
             src = new String(in.readAllBytes(), StandardCharsets.UTF_8);
         }
         String answer = "Plan first.\n```js\n" + src + "```\n";

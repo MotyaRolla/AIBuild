@@ -49,7 +49,7 @@ public final class BuildMode {
         m.put(LIGHT, new BuildMode(LIGHT, "Лёгкое думание", "~8–11 мин",
                 "off", "low", "off", "off", "low", 2, 1, 60000, true));
         m.put(STANDARD, new BuildMode(STANDARD, "Стандарт", "время зависит от сложности",
-                "off", "low", "low", "low", "low", 3, 1, 60000, false));
+                "off", "medium", "low", "low", "low", 3, 1, 120000, false));
         m.put(EXTRA, new BuildMode(EXTRA, "Экстра-думание", "время зависит от сложности",
                 "low", "high", "high", "low", "high", 3, 2, 200000, true));
         return m;
