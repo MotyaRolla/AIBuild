@@ -81,8 +81,8 @@ What the renders and transcripts showed:
   - sculptors: 73 s (setting), 164 s (chimney) and 593 s (house, one 300 KB answer).
 
   The slow house sculptor pushed the build past the review deadline, so the critic was skipped. Sculptors now
-  share a time limit (`script.sculpt-timeout`, 240 s); a sculptor still working then is stopped and its part
-  stays as it was.
+  share a time limit (`script.sculpt-timeout`, 600 s); a sculptor still working then is stopped and its part
+  stays as it was. The limit favours the rewrite: a 10-minute house rewrite is kept, and the critic is skipped.
 
 ## Limitations
 

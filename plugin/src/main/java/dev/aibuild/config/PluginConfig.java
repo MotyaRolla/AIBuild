@@ -150,7 +150,7 @@ public final class PluginConfig {
         reviewDeadline = perMode(c, "script.review-deadline", Map.of("fast", 0, "light", 0, "standard", 780, "extra", 0), 0, 7200);
         sculptors = perMode(c, "script.sculptors", Map.of("fast", 0, "light", 0, "standard", 3, "extra", 5), 0, 8);
         sculptEffort = c.getString("script.sculpt-effort", "low");
-        sculptTimeout = Math.clamp(c.getInt("script.sculpt-timeout", 240), 30, 3600);
+        sculptTimeout = Math.clamp(c.getInt("script.sculpt-timeout", 600), 30, 3600);
         visionEnabled = c.getBoolean("vision.enabled", true);
         visionJudge = c.getBoolean("vision.judge", true);
         visionImageSize = Math.clamp(c.getInt("vision.image-size", 1536), 256, 2048);
