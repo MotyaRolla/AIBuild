@@ -108,6 +108,52 @@ What the renders and transcripts showed:
 - **Measured effort in bench-d2c825:** a design at `medium` thought 24k–51k tokens (4–5 min). A sculptor at `low`
   still thought 96k tokens (10 min). The gateway's effort levels steer the length of thinking only loosely.
 
+## 3.1: interiors
+
+Before 3.1, a furnished room meant a few loose blocks. In the 6d3849 house, the upper floor held two single beds,
+a rug and a crafting table. Nothing in the flow looked inside: the judge, director and critic saw only the outside.
+
+- **Kit:**
+  - `furnish(x1,z1,x2,z2, y, type)` lays out a room the way builders do. It reads the walls first: doorways,
+    stairs and ladders stay clear, and tall pieces avoid windows.
+  - Wall pieces are built from several blocks: bed with nightstand, double bed, wardrobe with trapdoor doors,
+    bookcase with log ends and candles, kitchen counter, fireplace with hearth and mantel, desk with chair,
+    armchair, sideboard, kegs, workbench, altar, throne, pillar and banner.
+  - Centrepieces: a table with chairs and rug, a long dining table, tavern tables, pews with an aisle, stalls and
+    crates.
+  - Chandeliers hang 3–4 above the floor even under a high roof.
+  - There are 14 room types.
+  - `replace: true` takes back what an earlier `furnish()` placed in the area, using a registry of the blocks
+    each call placed.
+- **`volume()` interiors:**
+  - `rooms` gives one type per floor, or a list split by partition walls with doorways. Partitions move off doors.
+  - A straight staircase with a railed opening replaces the ladder when the room is long enough.
+  - Floor joists show as ceiling beams.
+  - Default rooms: `['living', 'bedroom', 'study', ...]`.
+- **Analyzer rooms:**
+  - Floor cells inside the shell are joined per level. Rooms split at doorways (a one-cell gap between walls
+    with a lintel). Strips (eave gaps, wall tops) and the tops of furniture standing in a room's own air are not
+    counted as rooms.
+  - Each room counts its furniture and darkest light.
+  - A room of 16+ cells with almost nothing in it is MAJOR `bare_room`; a thin one is MINOR `sparse_room`.
+  - Rooms are listed in the analysis text.
+- **Eyes:**
+  - Lanterns, candles and banners render in flat colours: their textures are sprite sheets or entity textures,
+    which used to come out as black blobs.
+  - `ContactSheet.interiors` shows up to four rooms steeply from above, with everything higher than their
+  furniture removed. The critic gets it as a second image.
+- **Interior designer** (`script.interiors`, on in light, standard and extra):
+  - One call per build, in parallel with the sculptors.
+  - It sees the rooms sheet and the room list, and writes one `part('interiors')` (or rewrites the script's own
+    interior part) using `furnish(..., {replace: true})` plus hand-placed touches.
+  - The result is kept only if it runs, changes nothing outside the rooms and adds no analyzer defects, both on its
+    own and after the sculptor rewrites are merged.
+- **Prompts:** the craft rules, the house, castle, tower and Asian recipes, the API card and the cottage example
+  now furnish every enterable room.
+- **Fixed along the way:** `dormer()` cleared a box larger than itself and left holes in the main roof, so the
+  3.0 cottage example had no closed interior.
+- `script-v3.1` in the bench includes the interior designer; `script-v3` does not.
+
 ## Limitations
 
 - **Unproven:** none of the new kits or the sculptor stage has a human ballot yet. 3.0 becomes "better" only
@@ -119,6 +165,10 @@ What the renders and transcripts showed:
 - **Stepped terrain:** there are no grass slabs in Minecraft, so `terrain()` shows terraces.
 - **Ramps:** `ramp()` is only as good as the average texture colours. For important surfaces, an explicit list
   of blocks is more reliable.
+- **Interiors:**
+  - An open archway without a lintel joins two areas into one room; the designer is told to split them from the
+    image.
+  - No human has rated the interiors yet.
 - **Sculptors:** a sculptor may only rewrite a `part()` that is written in the script; parts created inside kits
   (`tree`, `tower`) cannot be chosen. Rewrites that grow far beyond their part are not rejected automatically.
 - **Time:** standard mode takes longer than 2.0 (medium effort plus the sculptor stage); see the measured times.

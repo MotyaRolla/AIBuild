@@ -29,6 +29,11 @@ public final class PluginConfig {
         return concepts.getOrDefault(mode, 0) > 0;
     }
 
+    /** Whether an interior designer furnishes the rooms found inside a build (in parallel with the sculptors). */
+    public boolean interiors(String mode) {
+        return interiors.getOrDefault(mode, 0) > 0;
+    }
+
     /** Parts rewritten in parallel by sculptor calls after the art director's review (0 = off). */
     public int sculptors(String mode) {
         return sculptors.getOrDefault(mode, 0);
@@ -70,6 +75,7 @@ public final class PluginConfig {
     private final Map<String, Integer> reviewDeadline;
     private final Map<String, Integer> sculptors;
     private final Map<String, Integer> concepts;
+    private final Map<String, Integer> interiors;
     /** Reasoning effort of the lead designer's concept call. */
     public final String conceptEffort;
     /** Sculptors refine a part (keep its structure and kits, add craft) instead of redesigning it. */
@@ -161,6 +167,7 @@ public final class PluginConfig {
         sculptors = perMode(c, "script.sculptors", Map.of("fast", 0, "light", 0, "standard", 3, "extra", 5), 0, 8);
         sculptEffort = c.getString("script.sculpt-effort", "low");
         concepts = perMode(c, "script.concepts", Map.of("fast", 0, "light", 0, "standard", 1, "extra", 1), 0, 1);
+        interiors = perMode(c, "script.interiors", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 1), 0, 1);
         conceptEffort = BuildMode.effort(c.getString("script.concept-effort", "high"));
         sculptRefine = !"rewrite".equalsIgnoreCase(c.getString("script.sculpt-style", "refine").trim());
         sculptTimeout = Math.clamp(c.getInt("script.sculpt-timeout", 600), 30, 3600);

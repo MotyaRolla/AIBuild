@@ -84,6 +84,14 @@ script:
     standard: 1
     extra: 1
   concept-effort: high       # reasoning of the concept call when the mode's plan effort is off (else that is used)
+  # an interior designer sees every room found inside the build from above and furnishes them in one extra part
+  # (runs in parallel with the sculptors, reasoning = sculpt-effort); kept only if it changes nothing outside the
+  # rooms and adds no analyzer defects (1 = on, 0 = off)
+  interiors:
+    fast: 0
+    light: 1
+    standard: 1
+    extra: 1
   sculpt-timeout: 600        # seconds for all sculptors; a slower one is stopped and its part stays as it was
 
 vision:

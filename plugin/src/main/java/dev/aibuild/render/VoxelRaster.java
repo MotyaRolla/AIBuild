@@ -123,7 +123,12 @@ public final class VoxelRaster {
         return new Camera(false, from, f, focal, w, h);
     }
 
-    /** Perspective close-up of a box (a part), from one of the four iso directions, slightly above. */
+    /** Steep orthographic view down into a room box (walls and floors above it clipped by the caller). */
+    public static Camera room(int[] box, int view, int w, int h) {
+        return orthoFit(box, dir(ISO_AZ[Math.floorMod(view, 4)], -58), w, h, 0.96);
+    }
+
+        /** Perspective close-up of a box (a part), from one of the four iso directions, slightly above. */
     public static Camera closeup(int[] box, int view, int w, int h) {
         double[] c = {(box[0] + box[3] + 1) / 2.0, (box[1] + box[4] + 1) / 2.0, (box[2] + box[5] + 1) / 2.0};
         double rx = (box[3] - box[0] + 1) / 2.0, ry = (box[4] - box[1] + 1) / 2.0, rz = (box[5] - box[2] + 1) / 2.0;
@@ -179,6 +184,29 @@ public final class VoxelRaster {
     }
 
     private static final float P = 1f / 16;
+
+    /** Minecraft dye colours, for blocks whose texture is not a plain cube face (candles, banners). */
+    private static int dye(String colour, int fallback) {
+        return switch (colour) {
+            case "white" -> 0xF9FFFE;
+            case "orange" -> 0xF9801D;
+            case "magenta" -> 0xC74EBD;
+            case "light_blue" -> 0x3AB3DA;
+            case "yellow" -> 0xFED83D;
+            case "lime" -> 0x80C71F;
+            case "pink" -> 0xF38BAA;
+            case "gray" -> 0x474F52;
+            case "light_gray" -> 0x9D9D97;
+            case "cyan" -> 0x169C9C;
+            case "purple" -> 0x8932B8;
+            case "blue" -> 0x3C44AA;
+            case "brown" -> 0x835432;
+            case "green" -> 0x5E7C16;
+            case "red" -> 0xB02E26;
+            case "black" -> 0x1D1D21;
+            default -> fallback;
+        };
+    }
 
     private static Look lookOf(BlockSpec s, BlockInfo info, BlockTextures tex, int mask) {
         String n = s.name();
@@ -271,6 +299,9 @@ public final class VoxelRaster {
             boolean hanging = "true".equals(prop(s, info, "hanging", "false"));
             l.boxes = hanging ? new float[][]{{5 * P, P, 5 * P, 11 * P, 8 * P, 11 * P}, {7 * P, 8 * P, 7 * P, 9 * P, 1, 9 * P}}
                     : new float[][]{{5 * P, 0, 5 * P, 11 * P, 7 * P, 11 * P}, {6 * P, 7 * P, 6 * P, 10 * P, 9 * P, 10 * P}};
+            // the lantern texture is a sprite sheet, not a cube face: draw the lit glass as a flat warm (or soul) glow
+            l.top = l.side = l.bottom = -1;
+            l.colour = n.startsWith("soul") ? 0x7FE3E8 : 0xF4B848;
             l.emission = Math.max(l.emission, .9f);
         } else if (n.equals("iron_chain") || n.equals("chain") || n.equals("end_rod") || n.equals("lightning_rod")) {
             l.boxes = new float[][]{{6.5f * P, 0, 6.5f * P, 9.5f * P, 1, 9.5f * P}};
@@ -290,6 +321,8 @@ public final class VoxelRaster {
             l.boxes = new float[][]{{4 * P, 0, 4 * P, 12 * P, 8 * P, 12 * P}};
         } else if (n.endsWith("_candle") || n.equals("candle")) {
             l.boxes = new float[][]{{7 * P, 0, 7 * P, 9 * P, 6 * P, 9 * P}};
+            l.top = l.side = l.bottom = -1;
+            l.colour = n.equals("candle") ? 0xE2CFA0 : dye(n.substring(0, n.length() - "_candle".length()), 0xE2CFA0);
         } else if (n.endsWith("_button") || n.equals("lever") || n.equals("tripwire_hook")) {
             l.boxes = new float[0][];
         } else if (n.equals("ladder") || n.endsWith("_wall_sign") || n.endsWith("_wall_banner") || n.equals("vine")
@@ -301,7 +334,17 @@ public final class VoxelRaster {
                 default -> new float[]{0, 0, 14 * P, 1, 1, 1};
             }};
             l.kind = CUTOUT;
-        } else if (n.endsWith("_sign") || n.endsWith("_banner") || n.endsWith("_hanging_sign")) {
+        } else if (n.endsWith("_banner")) {
+            // banners are entity textures (not in the block atlas): their dye colour on the cloth
+            l.boxes = n.endsWith("_wall_banner") ? new float[][]{switch (facing) {
+                case "south" -> new float[]{P, 0, 0, 15 * P, 1, 2 * P};
+                case "east" -> new float[]{0, 0, P, 2 * P, 1, 15 * P};
+                case "west" -> new float[]{14 * P, 0, P, 1, 1, 15 * P};
+                default -> new float[]{P, 0, 14 * P, 15 * P, 1, 1};
+            }} : new float[][]{{7 * P, 0, 7 * P, 9 * P, 1, 9 * P}, {P, 2 * P, 7 * P, 15 * P, 1, 9 * P}};
+            l.top = l.side = l.bottom = -1;
+            l.colour = dye(n.substring(0, n.length() - (n.endsWith("_wall_banner") ? "_wall_banner" : "_banner").length()), 0xE8E8E8);
+        } else if (n.endsWith("_sign") || n.endsWith("_hanging_sign")) {
             l.boxes = new float[][]{{7 * P, 0, 7 * P, 9 * P, 9 * P, 9 * P}, {0, 8 * P, 7 * P, 1, 1, 9 * P}};
         } else if (n.endsWith("_bed")) {
             l.boxes = new float[][]{{0, 3 * P, 0, 1, 9 * P, 1}};

@@ -53,7 +53,19 @@ class ScriptPipelineTest {
         assertTrue(director.contains("refines the part") && !director.contains("DESIGN CONCEPT"), director);
     }
 
-    @Test void conceptsParseFromFencedJsonAndSkipEmptyBriefs() {
+    @Test void interiorDesignerGetsRoomsAndTheFurnishContract() {
+        String p = ScriptPrompts.interior("таверна у дороги", null, "- y=2 x -7..7 z -4..4: 99 floor cells", "interiors", null,
+                "part('house', () => {});\n", true);
+        assertTrue(p.contains("furnish(x1, z1, x2, z2, y - 1, type, {replace: true") && p.contains("y=2 x -7..7")
+                && p.contains("part('interiors', () => { ... });") && p.contains("added at the end"), p);
+        String own = ScriptPrompts.interior("a house", "Cosy cottage: beams", "- room", "interior", "part('interior', () => {});", "", false);
+        assertTrue(own.contains("replaces the script's interior part") && own.contains("DESIGN CONCEPT: Cosy cottage"), own);
+        assertEquals("interior", BuildPipeline.interiorPart("part('house', () => {});\npart('interior', () => {});\n"));
+        assertNull(BuildPipeline.interiorPart("part('house', () => {});\n"));
+        assertTrue(ScriptPrompts.system(dev.aibuild.script.Stdlib.V2, null).contains("furnish(x1,z1,x2,z2, y, type"));
+    }
+
+        @Test void conceptsParseFromFencedJsonAndSkipEmptyBriefs() {
         String answer = """
                 Here you go:
                 ```json

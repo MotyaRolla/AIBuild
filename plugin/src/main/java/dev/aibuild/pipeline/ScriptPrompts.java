@@ -95,8 +95,11 @@ public final class ScriptPrompts {
               (trim, lights, props, plants). Never polish a weak silhouette.
             - Scale for detail: house 20-40 across, mansion or temple 30-60, castle 60-140, statue/creature 25-80
               (a "small" subject is small for its kind, still big enough to carry detail). Explicit sizes are exact.
-            - Function where it applies: working doors, furnished lit rooms, stairs/ladders between floors,
-              headroom >= 3. Sculptures and objects need no rooms.
+            - Function where it applies: working doors, stairs/ladders between floors, headroom >= 3. Sculptures and
+              objects need no rooms.
+            - Interiors are judged too: players walk in. Every room of an enterable building is furnished for its
+              purpose and lit: give volume() its rooms (types per floor) or call furnish() for rooms you build
+              yourself, then add a few hand-placed touches that tell its story. An empty shell loses every time.
             - Build everything the request names; a requested scene is a scene.
             """;
 
@@ -244,7 +247,8 @@ public final class ScriptPrompts {
 
                 CURRENT SCRIPT:
                 %s""".formatted(Prompts.escape(request), round, rounds,
-                image ? "The attached image shows the current build from four sides (front = south) in real block colours."
+                image ? "The attached image shows the current build from four sides (front = south) in real block colours;"
+                        + " a second image, when attached, shows its rooms from above with everything higher removed."
                         : "No image is available; rely on the analysis and the script.",
                 HUNKS,
                 rejected.isEmpty() ? "" : "EARLIER REVISIONS THAT WERE REJECTED (do not repeat them):\n- " + String.join("\n- ", rejected) + "\n",
@@ -349,7 +353,43 @@ public final class ScriptPrompts {
                 dev.aibuild.script.ScriptPatch.numbered(script));
     }
 
-    /** A user's change request against the stored script of the current version. */
+    /**
+     * The interior designer furnishes every room of the build in one part() statement that runs after the rest
+     * (or replaces the script's own interior part). {@code rooms} lists the rooms the analyzer found.
+     */
+    public static String interior(String request, String concept, String rooms, String name, String current, String script,
+                                  boolean image) {
+        return """
+                BUILD REQUEST: "%s"
+                %sYou are the interior designer of this build. Players walk into every room and judge it like the facade.
+                %s
+                ROOMS FOUND INSIDE (y = the layer players stand in; furniture there; furnish() takes the floor layer y-1):
+                %s
+                Make every room look lived-in and right for this build:
+                - Give each room a purpose from the request and its place (ground floor: kitchen, living, hall, tavern,
+                  shop, smithy; upper floors: bedroom, study, library; a keep's hall: throne or hall; a temple: chapel).
+                - For each room call furnish(x1, z1, x2, z2, y - 1, type, {replace: true, wood: ...}) with its bounds;
+                  replace:true clears what volume() furnished there before. Rooms joined by a doorway are listed
+                  separately; an open-plan room may still hold two areas (see the image): furnish each with its bounds.
+                - Then add 2-5 hand-placed touches in the important rooms that tell their story (food on the table,
+                  a cauldron by the hearth, an open book on a lectern, sacks and tools, flowers on sills, candles).
+                - Light every room: no corner may stay dark.
+                - Only place blocks inside the rooms: never in walls, ceilings, roofs or outside. Keep doorways, stairs
+                  and ladders clear.
+                %s
+                Answer with ONE ```js block that contains only the statement part('%s', () => { ... }); — define any
+                helpers inside it. You may use the script's top-level variables and functions.
+
+                WHOLE SCRIPT (read-only context):
+                %s""".formatted(Prompts.escape(request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n",
+                image ? "The attached image shows each room from above with everything higher removed." : "",
+                rooms,
+                current == null ? "Your statement is added at the end of the script, after everything else."
+                        : "Your statement replaces the script's interior part:\n```js\n" + current + "\n```",
+                name, dev.aibuild.script.ScriptPatch.numbered(script));
+    }
+
+        /** A user's change request against the stored script of the current version. */
     public static String edit(String original, String change, String script, String evidence, String parts, boolean image) {
         return """
                 ORIGINAL REQUEST: "%s"

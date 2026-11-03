@@ -8,4 +8,7 @@
 - Variety: mix round and square towers, cone/spire roofs on some, open tops on others, a few timber hoardings or
   houses (volume()) leaning on the inner walls, banners (wool/banners), lanterns on the walkways.
 - Inside the walls: a courtyard with paths, a well, stables/smithy as small volumes, trees; never an empty yard.
+- Interiors: the keep has a great hall (volume rooms:['throne'] or furnish(..., 'hall')) with a high ceiling
+  (floorH 6-8), chandeliers and banners; upper floors bedroom/library; gatehouse and towers get storage or a
+  workshop. Every floor a player can reach is furnished and lit.
 - Setting: road to the gate, terrain around, water or moat (pond()/water), rocks, trees grouped in clumps.

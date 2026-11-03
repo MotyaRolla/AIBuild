@@ -45,10 +45,14 @@ palette('medieval'|'tudor'|'nordic'|'fantasy'|'japanese'|'desert'|'castle'|'goth
 
 ## Architecture kit (face/dir = 'north'|'south'|'east'|'west'; face = side the opening looks out of)
 volume(x1,z1,x2,z2, y, {palette, floors, floorH, every, plinth, jetty, door:{face, at}|false, windows:{boxes, shutters, w}|false,
-    roof:{...roof opts}, chimney:'east'|..., interior, wall, frame, beam, base, trim, gable, floor, roofM, doorM})
+    roof:{...roof opts}, chimney:'east'|..., rooms, wood, hearth, ladder, beams, interior, wall, frame, beam, base, trim,
+    gable, floor, roofM, doorM})
     ONE BUILDING MASS done like a master builder: stone plinth + stair skirt, corner posts and posts every 4, beams at
     floor lines, infill set 1 back (3 depth layers), windows in bays with sills/flower boxes, framed door with step and
-    lantern, floors, ladders, lights, layered roof. Returns {x0,z0,x1,z1, top, roofY, floors, door}.
+    lantern, layered roof. INSIDE: a real staircase (ladder when too small), ceiling joists, and every floor furnished:
+    rooms = one entry per floor, a room type or a list of types split by partition walls with doorways, e.g.
+    rooms:[['kitchen','dining'], ['bedroom','study']] (default ['living','bedroom',...]; false = bare floors).
+    Returns {x0,z0,x1,z1, top, roofY, floors, door, rooms:[{type, x1,z1,x2,z2, y, pieces}]}.
     COMPOSE 2-4 volumes of different size/height/roof (main + wing + tower + porch); never one plain box.
 tower(cx,y,cz, r, h, {palette, square, roof:{...}|false, windows, m})   castle tower: flared plinth, graded weathered
     masonry, slits and windows, corbelled parapet, merlons (open top) or cone/pyramid roof
@@ -64,9 +68,20 @@ column(x,y,z,h, {r, m, base, capital})   battlements(x1,y,z1,x2,z2, m, {every, c
 stairs(x,y,z, dir, steps, {w, m})   spiralStair(cx,y,cz,h,r,{m})   balcony(x,y,z, face, {w,d,m,rail})
 timber(x1,y1,z1,x2,y2,z2, {m, every, braces})   half-timber frame on a wall plane (same x or same z)
 
-## Interior kit
-bed(x,y,z, facing, color)  table(x,y,z,{w,d,m})  chair(x,y,z, facing, m)  shelves(x1,y,z1,x2,z2,h)
-fireplace(x,y,z, face, {m})  lamp(x,y,z, {hanging, chain})  rug(x1,z1,x2,z2, y, color, border)  kitchen(x,y,z, dir, n, face)
+## Interior kit (furnish rooms like a builder, never leave an empty shell)
+furnish(x1,z1,x2,z2, y, type, {wood, stone, rug, border, banner, extra:[pieces], skip:[pieces], replace, lights})
+    ONE CALL FURNISHES A ROOM: x1..z2 = the air cells inside its walls, y = its floor layer (furniture stands at y+1).
+    type: bedroom | kitchen | dining | living | hall | tavern | library | study | workshop | smithy | storage | shop |
+    chapel | throne. Reads the walls first: doorways, stairs and ladders stay clear, tall pieces avoid windows. Wall
+    pieces (bed+nightstand, double bed, wardrobe, bookcase, counter, fireplace with mantel, desk+chair, armchair, sideboard,
+    kegs, workbench, altar, throne, pillar, banner, barrels, chest, plant) go along the walls, far wall first; a
+    centrepiece (table with chairs and rug, long dining table, tavern tables, pews and aisle, stalls, crates) in the
+    middle; chandeliers hang from the ceiling. replace:true first removes what an earlier furnish() put there (e.g. the
+    default rooms of volume()). Returns {pieces}.
+chandelier(x, top, z, {drop, r, m})   bed(x,y,z, facing, color)  table(x,y,z,{w,d,m})  chair(x,y,z, facing, m)
+shelves(x1,y,z1,x2,z2,h)  fireplace(x,y,z, face, {m})  lamp(x,y,z, {hanging, chain})  rug(x1,z1,x2,z2, y, color, border)
+kitchen(x,y,z, dir, n, face)   personal touches by hand: flower_pot / potted_*, candle[candles=3,lit=true],
+    decorated_pot, lectern, brewing_stand, cauldron, anvil, chiseled_bookshelf, barrel, hay_block, *_wall_banner
 
 ## Nature and scene kit
 tree(x,y,z, {species:'oak'|'birch'|'spruce'|'pine'|'dark_oak'|'cherry'|'jungle'|'acacia'|'willow'|'azalea'|'pale_oak'|'palm'|'dead',

@@ -177,6 +177,7 @@ public final class StructureAnalyzer {
             checkAttachments();
             checkEnclosure();
             checkLighting();
+            checkRooms();
             checkDoorsAndBeds();
             checkVerticalAccess();
             checkLiquids();
@@ -240,7 +241,7 @@ public final class StructureAnalyzer {
                     nonAirBounds[5] - nonAirBounds[2] + 1,
                     nonAir, nameCounts.size(), stateCounts.size(), top,
                     interiorVolume, rooms, darkSpots, doors, windows, lightSources,
-                    metrics, issues);
+                    metrics, issues, roomList);
         }
 
         // ---------------------------------------------------------------------------------------------- (b) floating
@@ -866,6 +867,116 @@ public final class StructureAnalyzer {
         }
 
         // ---------------------------------------------------------------------------------------------- (f) lighting
+
+        /** Smallest floor area (cells) that counts as a room to furnish. */
+        private static final int ROOM_MIN_AREA = 12;
+        final List<AnalysisReport.Room> roomList = new ArrayList<>();
+
+        /**
+         * Rooms: floor cells inside the shell (enclosed air or a carpet with headroom, on a standable floor), joined
+         * per level by 4-connectivity. Each room counts the blocks standing in its box up to 3 high; a large room
+         * with almost nothing in it reads as an empty shell however good the facade is.
+         */
+        private void checkRooms() {
+            byte[] floor = new byte[n];
+            for (int i = 0; i < n; i++) {
+                int y = g.yOf(i), z = g.zOf(i), x = g.xOf(i);
+                // a carpet is part of the floor layer it lies in, not a floor under the layer above it
+                boolean onCarpet = g.contains(x, y - 1, z) && present[g.index(x, y - 1, z)] != 0 && Names.isCarpet(g.at(g.index(x, y - 1, z)));
+                boolean cell = interiorMask[i] != 0 && !onCarpet
+                        || present[i] != 0 && Names.isCarpet(g.at(i)) && g.contains(x, y + 1, z) && interiorMask[g.index(x, y + 1, z)] != 0;
+                if (cell && openAt(x, y + 1, z) && floorSolidAt(x, y - 1, z)) floor[i] = 1;
+            }
+            // doorways split rooms: a one-cell gap between wall blocks two high with a lintel above (a gap between
+            // furniture has open air above it)
+            for (int i = 0; i < n; i++) {
+                if (floor[i] == 0) continue;
+                int y = g.yOf(i), z = g.zOf(i), x = g.xOf(i);
+                if (!presentAt(x, y + 2, z)) continue;
+                boolean ew = presentAt(x - 1, y, z) && presentAt(x + 1, y, z) && presentAt(x - 1, y + 1, z) && presentAt(x + 1, y + 1, z);
+                boolean ns = presentAt(x, y, z - 1) && presentAt(x, y, z + 1) && presentAt(x, y + 1, z - 1) && presentAt(x, y + 1, z + 1);
+                if (ew != ns) floor[i] = 0;
+            }
+            byte[] seen = new byte[n];
+            IntQueue q = new IntQueue(1 << 10);
+            for (int i = 0; i < n; i++) {
+                if (floor[i] == 0 || seen[i] != 0) continue;
+                int y = g.yOf(i);
+                int x1 = Integer.MAX_VALUE, z1 = Integer.MAX_VALUE, x2 = Integer.MIN_VALUE, z2 = Integer.MIN_VALUE, area = 0, minLight = 15, core = 0;
+                seen[i] = 1;
+                q.add(i);
+                while (!q.isEmpty()) {
+                    int c = q.poll();
+                    int cx = g.xOf(c), cz = g.zOf(c);
+                    area++;
+                    x1 = Math.min(x1, cx);
+                    x2 = Math.max(x2, cx);
+                    z1 = Math.min(z1, cz);
+                    z2 = Math.max(z2, cz);
+                    if (interiorMask[c] != 0) minLight = Math.min(minLight, light[c]);
+                    for (int d = 2; d < 6; d++) {
+                        int nx = cx + DX[d], nz = cz + DZ[d];
+                        if (!g.contains(nx, y, nz)) continue;
+                        int j = g.index(nx, y, nz);
+                        if (floor[j] == 0 || seen[j] != 0) continue;
+                        seen[j] = 1;
+                        q.add(j);
+                    }
+                    boolean open3 = true;
+                    for (int dx = -1; dx <= 1 && open3; dx++) for (int dz = -1; dz <= 1 && open3; dz++) {
+                        open3 = g.contains(cx + dx, y, cz + dz) && floor[g.index(cx + dx, y, cz + dz)] != 0;
+                    }
+                    if (open3) core++;
+                }
+                // a room has somewhere to stand in the open: strips (eave gaps under a roof, wall tops, the tops of
+                // furniture rows) never hold a 3 x 3 patch of floor
+                if (area < ROOM_MIN_AREA || core < 1) continue;
+                int furniture = 0;
+                for (int yy = y; yy <= y + 2; yy++) for (int zz = z1; zz <= z2; zz++) for (int xx = x1; xx <= x2; xx++) {
+                    if (!g.contains(xx, yy, zz)) continue;
+                    int j = g.index(xx, yy, zz);
+                    if (present[j] != 0 && occ[j] == 0 || present[j] != 0 && (emit[j] > 0 || isFurnitureBlock(g.at(j)))) furniture++;
+                }
+                roomList.add(new AnalysisReport.Room(x1, z1, x2, z2, y, area, furniture, minLight));
+            }
+            // the tops of walls and tall furniture standing in a room's own air are not a floor above it: a real
+            // storey sits at least 4 higher (3 air + the floor layer)
+            List<AnalysisReport.Room> found = new ArrayList<>(roomList);
+            roomList.removeIf(r -> found.stream().filter(o -> o != r && o.y() < r.y() && r.y() - o.y() < 4)
+                    .mapToDouble(o -> overlap(r, o)).sum() >= 0.5);
+            roomList.sort((a, b) -> Integer.compare(b.area(), a.area()));
+            int bare = 0;
+            for (AnalysisReport.Room r : roomList) {
+                if (!opts.expectInterior) break;
+                if (r.area() >= 16 && r.density() < 0.08) {
+                    bare++;
+                    issues.add(Issue.of(Severity.MAJOR, "bare_room", "room " + r.describe()
+                            + " is nearly empty: furnish it for its purpose (furnish() or furniture pieces), with light"));
+                } else if (r.density() < 0.18) {
+                    issues.add(Issue.of(Severity.MINOR, "sparse_room", "room " + r.describe()
+                            + " is sparse: add furniture, decoration and light along its walls"));
+                }
+            }
+            metrics.put("furnishedRooms", roomList.size() - bare);
+            metrics.put("bareRooms", bare);
+        }
+
+        /** Share of room r's box that lies over room q's box widened by its walls (2 cells). */
+        private static double overlap(AnalysisReport.Room r, AnalysisReport.Room q) {
+            int w = Math.min(r.x2(), q.x2() + 2) - Math.max(r.x1(), q.x1() - 2) + 1, d = Math.min(r.z2(), q.z2() + 2) - Math.max(r.z1(), q.z1() - 2) + 1;
+            if (w <= 0 || d <= 0) return 0;
+            return (double) w * d / ((r.x2() - r.x1() + 1) * (r.z2() - r.z1() + 1));
+        }
+
+        /** Full blocks that are furniture rather than walls (they count in a room even though they are opaque). */
+        private static boolean isFurnitureBlock(BlockSpec s) {
+            String n = s.name();
+            return n.equals("bookshelf") || n.equals("chiseled_bookshelf") || n.equals("barrel") || n.equals("crafting_table")
+                    || n.endsWith("furnace") || n.equals("smoker") || n.equals("hay_block") || n.equals("loom")
+                    || n.equals("cartography_table") || n.equals("fletching_table") || n.equals("smithing_table")
+                    || n.equals("jukebox") || n.equals("note_block") || n.equals("beehive") || n.equals("melon")
+                    || n.equals("pumpkin") || n.equals("target");
+        }
 
         private void checkLighting() {
             light = new int[n];

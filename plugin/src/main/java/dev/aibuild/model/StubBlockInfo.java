@@ -127,8 +127,14 @@ public final class StubBlockInfo implements BlockInfo {
             d.put("rotation", "0");
         } else if (n.equals("anvil") || n.endsWith("glazed_terracotta") || n.equals("loom") || n.equals("stonecutter")
                 || n.equals("lectern") || n.equals("grindstone") || n.equals("bell") || n.endsWith("_head")
-                || n.equals("carved_pumpkin") || n.equals("jack_o_lantern") || n.equals("beehive")) {
+                || n.equals("carved_pumpkin") || n.equals("jack_o_lantern") || n.equals("beehive")
+                || n.equals("chiseled_bookshelf") || n.equals("decorated_pot")) {
             d.put("facing", "north");
+            if (n.equals("grindstone")) d.put("face", "wall");
+        } else if (n.equals("water_cauldron")) {
+            d.put("level", "1");
+        } else if (n.equals("composter")) {
+            d.put("level", "0");
         }
         return d;
     }

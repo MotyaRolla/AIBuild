@@ -803,6 +803,130 @@ public final class BuildPipeline {
         return null;
     }
 
+    /** Up to four rooms seen from above with everything higher removed, largest first. */
+    private byte[] interiorSheet(VoxelModel model, List<AnalysisReport.Room> rooms) {
+        List<int[]> boxes = new ArrayList<>();
+        List<String> labels = new ArrayList<>();
+        for (AnalysisReport.Room r : rooms.stream().limit(4).toList()) {
+            boxes.add(new int[]{r.x1(), r.z1(), r.x2(), r.z2(), r.y()});
+            labels.add("room y=" + r.y() + " x " + r.x1() + ".." + r.x2() + " z " + r.z1() + ".." + r.z2());
+        }
+        return ContactSheet.interiors(model, info, boxes, labels, cfg.get().visionImageSize);
+    }
+
+    /** The script's own interior part (interior, interiors, furniture, rooms...), or null when it has none. */
+    static String interiorPart(String source) {
+        for (String n : dev.aibuild.script.ScriptLint.partNames(source)) {
+            String l = n.toLowerCase(Locale.ROOT);
+            if (l.equals("interiors") || l.equals("interior") || l.equals("furniture") || l.equals("furnishing") || l.equals("rooms")) return n;
+        }
+        return null;
+    }
+
+    /**
+     * Cells that differ between two models outside every room box (the room's floor cells, from its floor layer up
+     * to 8 above): an interior rewrite must change nothing there.
+     */
+    public static int changesOutsideRooms(VoxelModel before, VoxelModel after, List<AnalysisReport.Room> rooms) {
+        int[] n = {0};
+        VoxelModel.CellConsumer check = (x, y, z, s) -> {
+            BlockSpec a = before.get(x, y, z), b = after.get(x, y, z);
+            boolean same = a == null || a.isAir() ? b == null || b.isAir() : a.equals(b);
+            if (same) return;
+            for (AnalysisReport.Room r : rooms) {
+                if (x >= r.x1() && x <= r.x2() && z >= r.z1() && z <= r.z2() && y >= r.y() - 1 && y <= r.y() + 8) return;
+            }
+            n[0]++;
+        };
+        before.forEach(check);
+        after.forEach((x, y, z, s) -> {
+            BlockSpec a = before.get(x, y, z);
+            if (a == null) check.accept(x, y, z, s);
+        });
+        return n[0];
+    }
+
+    /**
+     * Interior designer: one call that furnishes every room found inside the build, seeing the rooms from above.
+     * Its statement replaces the script's interior part or is appended. Kept only when it runs, changes nothing
+     * outside the rooms and adds no analyzer defects; one repair on failure. Null when nothing usable came back.
+     */
+    private PartRewrite designInterior(Job job, Transcript tr, String prompt, String system, ScriptRuntime runtime,
+                                       ScriptRuntime.Budget budget, int[] limits, String source, VoxelModel model,
+                                       AnalysisReport rep, AnalyzerOptions aopts, boolean eyes,
+                                       java.util.concurrent.atomic.AtomicBoolean stop) throws Exception {
+        List<AnalysisReport.Room> rooms = rep.roomList.stream().limit(10).toList();
+        String target = interiorPart(source), name = target != null ? target : "interiors";
+        StringBuilder list = new StringBuilder();
+        for (AnalysisReport.Room r : rooms) list.append("- ").append(r.describe()).append('\n');
+        String user = ScriptPrompts.interior(prompt, job.concept, list.toString(), name,
+                target == null ? null : ScriptPatch.partSource(source, target), source, eyes);
+        List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
+                eyes ? ChatMessage.user(user, List.of(interiorSheet(model, rooms))) : ChatMessage.user(user)));
+        int crit0 = rep.count(dev.aibuild.analysis.Severity.CRITICAL), maj0 = rep.count(dev.aibuild.analysis.Severity.MAJOR);
+        String answer = callText(job, tr, "interior", cfg.get().sculptEffort, msgs, null, stop);
+        for (int attempt = 0; attempt < 2; attempt++) {
+            ScriptPatch.Result patch = ScriptPatch.putPart(source, name, answer);
+            String problem;
+            if (patch.ok()) {
+                ScriptResult run = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
+                if (run.ok()) {
+                    prepare(run);
+                    AnalysisReport nrep = StructureAnalyzer.analyze(run.model(), info, aopts);
+                    int crit = nrep.count(dev.aibuild.analysis.Severity.CRITICAL), maj = nrep.count(dev.aibuild.analysis.Severity.MAJOR);
+                    int outside = changesOutsideRooms(model, run.model(), rooms);
+                    tr.note("interior-run-" + attempt, "ok blocks=" + run.model().nonAirCount() + " critical=" + crit + " major=" + maj
+                            + " outside=" + outside);
+                    if (crit <= crit0 && maj <= maj0 && outside == 0) {
+                        return new PartRewrite(name, ScriptPatch.partSource(patch.source(), name), crit, maj);
+                    }
+                    problem = outside > 0 ? "your statement changes " + outside + " blocks outside the rooms (walls, roofs, floors or"
+                            + " the outside); place blocks only inside the listed room bounds, from the floor layer up"
+                            : "it adds analyzer problems:\n" + clip(nrep.toText(), 1500);
+                } else {
+                    problem = "the script with your statement fails:\n" + run.error().describe();
+                }
+            } else {
+                problem = patch.error();
+            }
+            tr.note("interior-problem-" + attempt, problem);
+            if (attempt == 1) break;
+            msgs = new ArrayList<>(msgs);
+            msgs.add(ChatMessage.assistant(answer));
+            msgs.add(ChatMessage.user(ScriptPrompts.revisionFailed(problem)));
+            answer = callText(job, tr, "interior-fix", cfg.get().sculptEffort, msgs, null, stop);
+        }
+        return null;
+    }
+
+    /**
+     * Applies the interior designer's statement on top of the current script (after any sculptor rewrites) and
+     * keeps it when it still runs and adds no analyzer defects there.
+     */
+    private Revision mergeInterior(Job job, Transcript tr, String prompt, ScriptRuntime runtime, ScriptRuntime.Budget budget,
+                                   int[] limits, String source, VoxelModel model, AnalysisReport rep, AnalyzerOptions aopts,
+                                   PartRewrite r) {
+        ScriptPatch.Result patch = ScriptPatch.putPart(source, r.name(), r.statement());
+        if (!patch.ok()) return null;
+        ScriptResult run = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
+        if (!run.ok()) {
+            tr.note("interior rejected", "fails on the current script:\n" + run.error().describe());
+            return null;
+        }
+        prepare(run);
+        AnalysisReport nrep = StructureAnalyzer.analyze(run.model(), info, aopts);
+        if (nrep.count(dev.aibuild.analysis.Severity.CRITICAL) > rep.count(dev.aibuild.analysis.Severity.CRITICAL)
+                || nrep.count(dev.aibuild.analysis.Severity.MAJOR) > rep.count(dev.aibuild.analysis.Severity.MAJOR)) {
+            tr.note("interior rejected", "adds analyzer problems on the current script:\n" + clip(nrep.toText(), 1500));
+            return null;
+        }
+        int before = rep.roomList.stream().mapToInt(AnalysisReport.Room::furniture).sum();
+        int after = nrep.roomList.stream().mapToInt(AnalysisReport.Room::furniture).sum();
+        tr.note("interior accepted", "part " + r.name() + ", furniture " + before + " -> " + after);
+        say(job, "<gray>Интерьеры обставлены: мебели <v0> → <v1>.</gray>", before, after);
+        return new Revision(patch.source(), run, "furnished interiors");
+    }
+
     private static String diagnosis(String answer) {
         String a = answer == null ? "" : answer;
         int cut = a.indexOf("<<<<<<<");
@@ -839,6 +963,15 @@ public final class BuildPipeline {
         List<String> rejected = new ArrayList<>();
         Verdict v = new Verdict();
         int accepted = 0;
+        boolean furnish = job.stdlib != dev.aibuild.script.Stdlib.V1 && aopts.expectInterior && !rep.roomList.isEmpty()
+                && (job.interiors != null ? job.interiors : c.interiors(job.mode.id));
+        var interiorStop = new java.util.concurrent.atomic.AtomicBoolean();
+        long interiorDeadline = System.nanoTime() + c.sculptTimeout * 1_000_000_000L;
+        String interiorBase = source;
+        VoxelModel interiorModel = model;
+        AnalysisReport interiorRep = rep;
+        Future<PartRewrite> interior = !furnish ? null : side.submit(() -> designInterior(job, tr, prompt, system, runtime, budget, limits,
+                interiorBase, interiorModel, interiorRep, aopts, eyes, interiorStop));
         if (sculptors > 0 && eyes) {
             Revision sr = sculpt(job, tr, prompt, runtime, budget, limits, system, source, model, rep, aopts, sculptors);
             if (sr != null) {
@@ -857,6 +990,36 @@ public final class BuildPipeline {
                 livePreview(build, model);
             }
         }
+        if (interior != null) {
+            Revision ir = null;
+            try {
+                PartRewrite r = awaitUntil(interior, job, interiorDeadline);
+                if (r != null) ir = mergeInterior(job, tr, prompt, runtime, budget, limits, source, model, rep, aopts, r);
+            } catch (java.util.concurrent.TimeoutException e) {
+                tr.note("interior timed out", "still working after " + c.sculptTimeout + " s, rooms left as they were");
+            } catch (CancelledException e) {
+                if (job.cancelled.get()) throw e;
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.WARNING, "interior designer failed", e);
+            } finally {
+                interiorStop.set(true);
+            }
+            if (ir != null) {
+                accepted++;
+                source = ir.source();
+                model = ir.result().model();
+                rep = StructureAnalyzer.analyze(model, info, aopts);
+                job.script = source;
+                job.smoothed = ir.result().smoothed();
+                job.scriptParts = ir.result().partTable(30);
+                synchronized (job) {
+                    job.doorways.clear();
+                    job.doorways.addAll(ir.result().doorways());
+                }
+                st.model = model;
+                livePreview(build, model);
+            }
+        }
         // the frozen 2.0 bench variant fixes its rounds and keeps them all
         int deadline = job.criticRounds != null ? 0 : c.reviewDeadline(job.mode.id);
         for (int round = 1; round <= rounds; round++) {
@@ -868,10 +1031,11 @@ public final class BuildPipeline {
             v.rounds = round;
             job.status("ИИ критикует постройку: раунд " + round + " из " + rounds + "…", 0.5 + 0.4 * (round - 1) / rounds);
             byte[] img = eyes ? sheet(model) : null;
+            byte[] rooms = eyes && aopts.expectInterior && !rep.roomList.isEmpty() ? interiorSheet(model, rep.roomList) : null;
             String evidence = withAutoNotes(job, rep.toText()) + "\n" + SpatialReport.render(model, info);
             String user = ScriptPrompts.critic(prompt, source, evidence, job.scriptParts, img != null, round, rounds, rejected);
             List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
-                    img == null ? ChatMessage.user(user) : ChatMessage.user(user, List.of(img))));
+                    img == null ? ChatMessage.user(user) : ChatMessage.user(user, rooms == null ? List.of(img) : List.of(img, rooms))));
             String effort = round == 1 ? job.mode.effortReview : job.mode.effortReviewFollowup;
             String answer = callText(job, tr, "critic" + round, effort, msgs);
             v.reviewerCalls++;
@@ -1862,6 +2026,7 @@ public final class BuildPipeline {
                 if (name.startsWith("script-v3")) {
                     cj.concepts = v31;
                     cj.sculptRefine = v31;
+                    cj.interiors = v31;
                 }
                 Staged st = designAndScript(cj, ctr, prompt, null, null, false);
                 Verdict v = cj.script != null ? verifyScript(cj, ctr, null, st, prompt) : new Verdict();

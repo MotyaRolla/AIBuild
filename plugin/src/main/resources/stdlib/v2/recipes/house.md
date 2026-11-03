@@ -9,7 +9,10 @@
   campfire, dormers on long roofs. Never a flat-topped box.
 - Signature details: hanging sign or lantern by the door, window boxes, barrels and crates, a bench, a woodpile,
   a well or cart for taverns, market awning for shops (wool/banners), smoke from the chimney.
-- Interior (when requested): furnished rooms with light; kitchen, table and chairs, beds upstairs, ladder/stairs.
+- Interior: every enterable building is furnished; players walk in. Give each volume() rooms for its purpose
+  (cottage: ['kitchen','living'] below, ['bedroom','study'] above; tavern: ['tavern'] below, bedrooms above; shop:
+  ['shop'] below, ['bedroom'] above; smithy: ['smithy']). Floors 4-5 high so rooms breathe. Add 2-4 personal touches
+  by hand where the story is (a cauldron by the hearth, sacks of hay in the store, a lectern with candles).
 - Setting: groundCover() around it, a curving path() to the door, fenceLine() garden, 1-3 custom tree()s, bushes,
   flowers in clusters, a lampPost(). The house must stay the clear subject: the plot reaches at most 6-8 blocks
   beyond the walls on each side (a 14x11 house sits on about 28x25, not 60x50). Trees stand at the sides and back,

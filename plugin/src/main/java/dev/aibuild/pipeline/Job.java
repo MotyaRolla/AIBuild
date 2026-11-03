@@ -67,7 +67,7 @@ public final class Job {
     /** Critic rounds for this job instead of the mode's configured count (benchmarks of older pipelines). */
     public volatile Integer criticRounds;
     /** Design concepts and refining sculptors for this job instead of the configured choice (benchmarks); null = config. */
-    public volatile Boolean concepts, sculptRefine;
+    public volatile Boolean concepts, sculptRefine, interiors;
     /** The design concept the chosen script follows, null when there was none. */
     public volatile String concept;
 

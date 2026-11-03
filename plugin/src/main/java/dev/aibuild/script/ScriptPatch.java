@@ -103,7 +103,21 @@ public final class ScriptPatch {
         return new Result(source.substring(0, at[0]) + code.substring(mine[0], mine[1]) + source.substring(at[1]), null, 1, false);
     }
 
-    /** The source text of one part() statement, or null. */
+    /**
+     * Like {@link #replacePart}, but appends the statement at the end of the script when it has no such part yet
+     * (a new part that runs after everything else, such as the interior designer's furnishing).
+     */
+    public static Result putPart(String source, String name, String replacement) {
+        if (ScriptLint.partSpan(source, name) != null) return replacePart(source, name, replacement);
+        String code = ScriptLint.extract(replacement);
+        if (code.isBlank()) code = replacement == null ? "" : replacement.strip();
+        int[] mine = ScriptLint.partSpan(code, name);
+        if (mine == null) return new Result(source, "the answer must be one part('" + name + "', () => { ... }) call", 0, false);
+        String base = source.endsWith("\n") ? source : source + "\n";
+        return new Result(base + code.substring(mine[0], mine[1]) + "\n", null, 1, false);
+    }
+
+        /** The source text of one part() statement, or null. */
     public static String partSource(String source, String name) {
         int[] at = ScriptLint.partSpan(source, name);
         return at == null ? null : source.substring(at[0], at[1]);

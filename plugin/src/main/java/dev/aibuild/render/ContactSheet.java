@@ -85,7 +85,33 @@ public final class ContactSheet {
         return png(sheet);
     }
 
-    /** One floor seen from above with everything higher removed (interiors). */
+    /**
+     * Interiors: up to four rooms (2 × 2 tiles), each seen steeply from above with everything higher than its
+     * furniture removed, so the model sees what stands in the room. {@code rooms} are {x1,z1,x2,z2,y,label...}
+     * boxes; y is the layer players stand in.
+     */
+    public static byte[] interiors(VoxelModel model, BlockInfo info, java.util.List<int[]> rooms, java.util.List<String> labels, int maxSide) {
+        int n = Math.min(4, rooms.size());
+        if (n == 0) return of(model, info, maxSide);
+        int cols = n == 1 ? 1 : 2, rows = n <= 2 ? 1 : 2;
+        int tw = maxSide / cols, th = n == 1 ? maxSide * 3 / 4 : tw * 3 / 4;
+        BufferedImage sheet = new BufferedImage(tw * cols, th * rows, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = sheet.createGraphics();
+        try {
+            for (int i = 0; i < n; i++) {
+                int[] r = rooms.get(i);
+                int clip = r[4] + 2;
+                int[] box = {r[0] - 1, r[4] - 1, r[1] - 1, r[2] + 1, clip, r[3] + 1};
+                tile(g, VoxelRaster.render(model, info, VoxelRaster.room(box, 0, tw, th), VoxelRaster.Options.defaults().clip(clip)),
+                        (i % cols) * tw, (i / cols) * th, labels.get(i));
+            }
+        } finally {
+            g.dispose();
+        }
+        return png(sheet);
+    }
+
+        /** One floor seen from above with everything higher removed (interiors). */
     public static BufferedImage cutaway(VoxelModel model, BlockInfo info, int clipY, int w, int h) {
         int[] b = model.solidBounds();
         if (b == null) return new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);

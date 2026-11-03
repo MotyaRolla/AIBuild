@@ -58,6 +58,24 @@ public final class AnalysisReport {
     /** Issues, most severe first. */
     public final List<Issue> issues;
 
+    /**
+     * One room: a connected floor area on one level inside the shell. {@code y} is the layer players stand in;
+     * {@code furniture} counts blocks standing in the room up to 3 high; {@code minLight} is the darkest floor cell.
+     */
+    public record Room(int x1, int z1, int x2, int z2, int y, int area, int furniture, int minLight) {
+        public double density() {
+            return area == 0 ? 0 : (double) furniture / area;
+        }
+
+        public String describe() {
+            return "y=" + y + " x " + x1 + ".." + x2 + " z " + z1 + ".." + z2 + ": " + area + " floor cells, " + furniture
+                    + " furniture blocks, darkest light " + minLight;
+        }
+    }
+
+    /** Rooms of 12+ floor cells, largest first (empty when the build has no interior). */
+    public final List<Room> roomList;
+
     /** Maximum number of {@link #topBlocks} entries. */
     public static final int TOP_BLOCK_LIMIT = 30;
 
@@ -69,6 +87,16 @@ public final class AnalysisReport {
                           int distinctStates, List<Map.Entry<String, Integer>> topBlocks, int interiorVolume,
                           int rooms, int darkSpots, int doors, int windows, int lightSources,
                           Map<String, Object> metrics, List<Issue> issues) {
+        this(bounds, sizeX, sizeY, sizeZ, nonAir, distinctBlocks, distinctStates, topBlocks, interiorVolume, rooms, darkSpots,
+                doors, windows, lightSources, metrics, issues, List.of());
+    }
+
+    /** As above, with the rooms found inside the shell. */
+    public AnalysisReport(int[] bounds, int sizeX, int sizeY, int sizeZ, int nonAir, int distinctBlocks,
+                          int distinctStates, List<Map.Entry<String, Integer>> topBlocks, int interiorVolume,
+                          int rooms, int darkSpots, int doors, int windows, int lightSources,
+                          Map<String, Object> metrics, List<Issue> issues, List<Room> roomList) {
+        this.roomList = roomList == null ? List.of() : List.copyOf(roomList);
         this.bounds = bounds == null ? null : bounds.clone();
         this.sizeX = Math.max(0, sizeX);
         this.sizeY = Math.max(0, sizeY);
@@ -217,6 +245,12 @@ public final class AnalysisReport {
         sb.append("Metrics: ").append(metricsLine()).append('\n');
         String facades = facadeLine();
         if (!facades.isEmpty()) sb.append("Facades: ").append(facades).append('\n');
+        if (!roomList.isEmpty()) {
+            sb.append("Rooms (y = standing layer):");
+            for (int i = 0; i < Math.min(6, roomList.size()); i++) sb.append(i == 0 ? " " : "; ").append(roomList.get(i).describe());
+            if (roomList.size() > 6) sb.append("; +").append(roomList.size() - 6).append(" more");
+            sb.append('\n');
+        }
 
         sb.append("Issues: ");
         boolean first = true;
