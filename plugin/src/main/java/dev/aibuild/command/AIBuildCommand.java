@@ -521,7 +521,7 @@ public final class AIBuildCommand implements BasicCommand {
         ModeArgs ma = stripMode(Arrays.copyOfRange(a0, 1, a0.length));
         BuildMode mode = ma.mode() != null ? ma.mode() : plugin.modeOf(s instanceof Player p ? p.getUniqueId() : null);
         String[] a = ma.rest();
-        String va = "script-v2", vb = "script-v3";
+        String va = "script-v2", vb = "script-v3.1";
         int repeat = 1;
         java.util.List<String> rest = new java.util.ArrayList<>();
         for (int i = 0; i < a.length; i++) {

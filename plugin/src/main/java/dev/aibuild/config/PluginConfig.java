@@ -24,6 +24,11 @@ public final class PluginConfig {
         return reviewDeadline.getOrDefault(mode, 0);
     }
 
+    /** Whether a lead designer writes one design concept per script candidate before they are written. */
+    public boolean concepts(String mode) {
+        return concepts.getOrDefault(mode, 0) > 0;
+    }
+
     /** Parts rewritten in parallel by sculptor calls after the art director's review (0 = off). */
     public int sculptors(String mode) {
         return sculptors.getOrDefault(mode, 0);
@@ -64,6 +69,11 @@ public final class PluginConfig {
     private final Map<String, Integer> criticRounds;
     private final Map<String, Integer> reviewDeadline;
     private final Map<String, Integer> sculptors;
+    private final Map<String, Integer> concepts;
+    /** Reasoning effort of the lead designer's concept call. */
+    public final String conceptEffort;
+    /** Sculptors refine a part (keep its structure and kits, add craft) instead of redesigning it. */
+    public final boolean sculptRefine;
     /** Reasoning effort of the art director and the part sculptors. */
     public final String sculptEffort;
     /** Seconds the sculptors get together; a sculptor still working then is stopped and its part left as it was. */
@@ -150,6 +160,9 @@ public final class PluginConfig {
         reviewDeadline = perMode(c, "script.review-deadline", Map.of("fast", 0, "light", 0, "standard", 780, "extra", 0), 0, 7200);
         sculptors = perMode(c, "script.sculptors", Map.of("fast", 0, "light", 0, "standard", 3, "extra", 5), 0, 8);
         sculptEffort = c.getString("script.sculpt-effort", "low");
+        concepts = perMode(c, "script.concepts", Map.of("fast", 0, "light", 0, "standard", 1, "extra", 1), 0, 1);
+        conceptEffort = BuildMode.effort(c.getString("script.concept-effort", "high"));
+        sculptRefine = !"rewrite".equalsIgnoreCase(c.getString("script.sculpt-style", "refine").trim());
         sculptTimeout = Math.clamp(c.getInt("script.sculpt-timeout", 600), 30, 3600);
         visionEnabled = c.getBoolean("vision.enabled", true);
         visionJudge = c.getBoolean("vision.judge", true);

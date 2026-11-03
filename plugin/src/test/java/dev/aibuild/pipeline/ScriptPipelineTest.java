@@ -36,4 +36,37 @@ class ScriptPipelineTest {
                 "part('head', () => {});\n", true);
         assertTrue(sculptor.contains("part('head', () => { ... });") && sculptor.contains("sharper snout"));
     }
+
+    @Test void conceptsSteerCandidatesAndRefiningSculptorsKeepStructure() {
+        var lib = dev.aibuild.script.Stdlib.V2;
+        String ask = ScriptPrompts.concepts(lib, "уютный домик с садом, 14 на 11", "Make it rich.", 2);
+        assertTrue(ask.contains("Write 2 design concept(s)") && ask.contains("differ in layout") && ask.contains("RECIPE: house"), ask);
+        assertFalse(ScriptPrompts.concepts(lib, "a fox", "", 1).contains("differ in layout"), "one concept has nothing to differ from");
+        String create = ScriptPrompts.create(lib, "a fox", "Make it rich.", "Lean fox: sitting, tail wrapped");
+        assertTrue(create.contains("DESIGN CONCEPT for your version") && create.contains("tail wrapped"), create);
+        assertFalse(ScriptPrompts.create(lib, "a fox", "Make it rich.").contains("DESIGN CONCEPT"));
+        String refine = ScriptPrompts.sculptor("a fox", "Lean fox", "head", "90 blocks", "sharper snout", "part('head', () => {});",
+                "part('head', () => {});\n", true, true);
+        assertTrue(refine.contains("Refine ONE part") && refine.contains("never hand-roll") && refine.contains("DESIGN CONCEPT: Lean fox")
+                && refine.contains("part('head', () => { ... });"), refine);
+        String director = ScriptPrompts.director("a fox", null, "- head: 90 blocks", "no issues", 3, true);
+        assertTrue(director.contains("refines the part") && !director.contains("DESIGN CONCEPT"), director);
+    }
+
+    @Test void conceptsParseFromFencedJsonAndSkipEmptyBriefs() {
+        String answer = """
+                Here you go:
+                ```json
+                {"concepts":[{"name":"Фахверк с эркером","brief":"Two-storey timber frame 14x11, jettied upper floor, stone chimney on the east gable."},
+                             {"name":"x","brief":"short"},
+                             {"brief":"L-shaped cottage 14x11 with a steep thatched-look roof and a well in the yard."}]}
+                ```""";
+        var list = Concepts.parse(answer, 3);
+        assertEquals(2, list.size());
+        assertEquals("Фахверк с эркером", list.get(0).name());
+        assertEquals("concept 2", list.get(1).name());
+        assertEquals(1, Concepts.parse(answer, 1).size());
+        assertTrue(Concepts.parse("no json at all", 2).isEmpty());
+        assertTrue(Concepts.parse("{\"parts\":[]}", 2).isEmpty());
+    }
 }

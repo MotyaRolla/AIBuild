@@ -133,6 +133,11 @@ public final class ScriptPrompts {
 
     /** First construction request against {@code lib}, with its expert recipe cards for this kind of subject. */
     public static String create(Stdlib lib, String request, String scale) {
+        return create(lib, request, scale, null);
+    }
+
+    /** As above, following {@code concept} (a design brief from {@link #concepts}) when it is not null. */
+    public static String create(Stdlib lib, String request, String scale, String concept) {
         if (lib == Stdlib.V1) {
             return """
                     BUILD REQUEST: "%s"
@@ -147,14 +152,47 @@ public final class ScriptPrompts {
                 BUILD REQUEST: "%s"
 
                 %s
-
+                %s
                 Before writing code, plan in your head (briefly, no coordinate lists):
                 1. The 3-5 traits that make this subject unmistakable, and how it looks from every side.
                 2. The parts with their sizes and how they connect; which kits build each part.
                 3. The setting that frames it, and the focal areas that get the most detail.
                 4. How you avoid the failure modes (flat walls, visible primitives, single-block surfaces).
                 Then write the complete build script. %s
-                """.formatted(Prompts.escape(request), recipes.isBlank() ? "" : recipes, scale);
+                """.formatted(Prompts.escape(request), recipes.isBlank() ? "" : recipes,
+                concept == null ? "" : "\nDESIGN CONCEPT for your version (follow it; where it conflicts with the request, the request wins):\n"
+                        + concept + "\n", scale);
+    }
+
+    /**
+     * The lead designer writes {@code n} short design concepts for the script candidates: concrete layouts that
+     * keep everything the request states and vary only what it leaves open.
+     */
+    public static String concepts(Stdlib lib, String request, String scale, int n) {
+        String recipes = Recipes.forRequest(lib, request);
+        return """
+                BUILD REQUEST: "%s"
+
+                %s
+
+                You are the lead designer. %s Write %d design concept(s): short, concrete briefs a builder can follow.
+                Do not write code.
+                - Everything the request states is fixed (subject, sizes, materials, style, named elements): every
+                  concept keeps it unchanged. Vary only what the request leaves open.%s
+                - The subject dominates: most of the blocks belong to it. The setting frames it on a plot at most about
+                  8 blocks beyond it on each side (more only for a requested scene), and nothing hides it from the front.
+                - Give the overall size in blocks (width x depth x height), at a scale that carries detail for this kind
+                  of subject unless the request gives the size. %s
+                - Name 3-5 signature details that make it unmistakable, and where they go (front = south).
+                - Palette: 4-6 real block ids with roles (main, structure, roof or body, accent, ground).
+                - Say which kits build which parts (volume, roof, tower, tree, ...).
+                Each brief is under 120 words, in English; each name is 2-5 words in the request's language.
+                Answer with ONE JSON object: {"concepts":[{"name":"...","brief":"..."}]}""".formatted(Prompts.escape(request),
+                recipes.isBlank() ? "" : recipes,
+                n == 1 ? "A builder will write a build script for this request." : n + " builders will each write a build script for this request, one concept each.",
+                n,
+                n == 1 ? "" : "\n- The concepts differ in layout and silhouette (plan shape, massing, roof forms, pose or composition),\n  not only in colours or decoration.",
+                scale);
     }
 
     /** Asks for a corrected full script after a failed run. */
@@ -218,9 +256,17 @@ public final class ScriptPrompts {
      * concrete brief for each sculptor.
      */
     public static String director(String request, String parts, String evidence, int max) {
+        return director(request, null, parts, evidence, max, false);
+    }
+
+    /**
+     * As above. {@code concept} is the design brief the build follows (null when none); with {@code refine} the
+     * sculptors keep a part's structure and add craft on top, so the briefs ask for additions, not redesigns.
+     */
+    public static String director(String request, String concept, String parts, String evidence, int max, boolean refine) {
         return """
                 BUILD REQUEST: "%s"
-                You are the art director of this build. The attached image shows it from four sides, at eye level and
+                %s                You are the art director of this build. The attached image shows it from four sides, at eye level and
                 from the top. Decide which parts would gain the most from a master builder's rework: weak or stiff
                 silhouettes, flat walls or single-block surfaces, visible primitives, missing signature details of the
                 subject, and above all the focal areas (faces, entrances, crowns, rooflines, joints). Parts that carry
@@ -228,18 +274,58 @@ public final class ScriptPrompts {
                 pick a part together with a part nested inside it ('house' and 'house/roof'): the whole subject or its
                 weakest pieces. Each brief goes only to that part's sculptor, so name the right part. When scenery
                 swamps the subject (a huge plot, trees hiding it), brief the scenery part to shrink and clear the view.
-                For each, write a concrete brief: what is wrong, what to build instead (forms, depth layers, kits,
-                shading, details), and keep its position and footprint (within about 3 blocks) unless it must grow.
+                For each, write a concrete brief: %s
                 Answer with ONE JSON object: {"parts":[{"name":"...","brief":"..."}]} (an empty list if nothing would gain).
                 PARTS (name: blocks and bounds):
                 %s
                 AUTOMATIC ANALYSIS:
-                %s""".formatted(Prompts.escape(request), max, parts, evidence);
+                %s""".formatted(Prompts.escape(request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n", max,
+                refine ? """
+                        what is weak and what to add or change on the existing part (trims, frames, depth layers,
+                        partial blocks, shading, signature details, kit options). The sculptor refines the part and keeps
+                        its masses, footprint and roof forms; ask for a redesign only when a part is clearly wrong."""
+                        : """
+                        what is wrong, what to build instead (forms, depth layers, kits,
+                        shading, details), and keep its position and footprint (within about 3 blocks) unless it must grow.""",
+                parts, evidence);
     }
 
     /** A sculptor rewrites one part() statement at a higher level of craft. */
     public static String sculptor(String request, String name, String bounds, String brief, String partSource,
                                   String script, boolean image) {
+        return sculptor(request, null, name, bounds, brief, partSource, script, image, false);
+    }
+
+    /**
+     * As above. With {@code refine} the sculptor keeps the part's structure and the kit calls that build it and adds
+     * craft on top (faster than a redesign, and it keeps the kits' roofs and walls); {@code concept} may be null.
+     */
+    public static String sculptor(String request, String concept, String name, String bounds, String brief, String partSource,
+                                  String script, boolean image, boolean refine) {
+        if (refine) return """
+                BUILD REQUEST: "%s"
+                %sYou are a master builder. Refine ONE part of this build: part('%s'), currently %s (world coordinates).
+                The rest of the build stays as it is. Keep this part's structure: its masses, footprint, heights, roof
+                forms and position, and the kit calls that build them (volume, roof, tower, tree, ...). Change a kit's
+                options rather than replacing it with hand-placed blocks; never hand-roll a roof, wall or tree that a
+                kit builds. Change the structure only where the brief asks for it.
+                ART DIRECTOR'S BRIEF: %s
+                %s
+                Add craft on top of what is there: frames and trims, depth layers, partial blocks (stairs, slabs, walls,
+                trapdoors, fences) for micro-detail, shade() or mixes on plain surfaces, the subject's signature details,
+                lights and props where the eye goes. Keep the statement compact: loops and helpers, not long block lists.
+                You may use the script's top-level variables and functions.
+                Answer with ONE ```js block that contains only the complete replacement statement
+                part('%s', () => { ... }); — define any helpers inside it.
+
+                CURRENT PART:
+                ```js
+                %s
+                ```
+                WHOLE SCRIPT (read-only context):
+                %s""".formatted(Prompts.escape(request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n", name, bounds, brief,
+                image ? "The attached image shows close-ups of this part in the build." : "", name, partSource,
+                dev.aibuild.script.ScriptPatch.numbered(script));
         return """
                 BUILD REQUEST: "%s"
                 You are a master builder. Rewrite ONE part of this build: part('%s'), currently %s (world coordinates).

@@ -260,12 +260,15 @@ public final class BuildPipeline {
         ScriptRuntime.Budget budget = BuildMode.EXTRA.equals(job.mode.id) ? ScriptRuntime.Budget.extra() : ScriptRuntime.Budget.standard();
         long seed = build == null ? 1L : build.id.hashCode();
         int n = Math.max(1, c.scriptCandidates(job.mode.id));
+        List<Concepts.Concept> concepts = concepts(job, tr, prompt, runtime, n);
         List<Future<ScriptCandidate>> futures = new ArrayList<>();
         for (int i = 0; i < n; i++) {
             long candidateSeed = seed + i * 7919L;
             String tag = n == 1 ? "script" : "script-c" + (i + 1);
             Consumer<ScriptResult> show = i == 0 ? streamingPreview(job, build, anchor) : null;
-            futures.add(side.submit(() -> writeScript(job, tr, prompt, candidateSeed, tag, runtime, budget, safety, show)));
+            // fewer concepts than candidates: the rest get the plain request
+            String concept = i < concepts.size() ? concepts.get(i).forPrompt() : null;
+            futures.add(side.submit(() -> writeScript(job, tr, prompt, concept, candidateSeed, tag, runtime, budget, safety, show)));
         }
         if (n > 1) say(job, "<gray>ИИ пишет <v0> независимых варианта программы, лучший выберет проверка.</gray>", n);
         List<ScriptCandidate> ok = new ArrayList<>();
@@ -291,6 +294,7 @@ public final class BuildPipeline {
             throw new IllegalStateException("программа постройки не выполнилась");
         }
         ScriptCandidate best = pickCandidate(job, tr, prompt, ok);
+        job.concept = best.concept();
         ScriptResult result = best.result();
         String source = best.source();
         seed = best.seed();
@@ -331,20 +335,58 @@ public final class BuildPipeline {
         return st;
     }
 
-    /** A script that ran successfully, with its brief and analysis. */
-    private record ScriptCandidate(String source, ScriptResult result, long seed, JsonObject plan, AnalysisReport report) {
+    /** A script that ran successfully, with its brief, analysis and the design concept it followed (or null). */
+    private record ScriptCandidate(String source, ScriptResult result, long seed, JsonObject plan, AnalysisReport report,
+                                   String concept) {
         int defects() {
             return report.count(dev.aibuild.analysis.Severity.CRITICAL) * 10 + report.count(dev.aibuild.analysis.Severity.MAJOR);
         }
     }
 
+    /**
+     * The lead designer's concepts for {@code n} candidates (3.0 library only, when enabled): one cheap call before
+     * the scripts. Empty when off or when the answer is unusable, so the candidates get the plain request.
+     */
+    private List<Concepts.Concept> concepts(Job job, Transcript tr, String prompt, ScriptRuntime runtime, int n) throws CancelledException {
+        PluginConfig c = cfg.get();
+        boolean on = job.concepts != null ? job.concepts : c.concepts(job.mode.id);
+        if (!on || runtime.stdlib() == dev.aibuild.script.Stdlib.V1) return List.of();
+        job.status("ИИ продумывает замысел постройки…", 0.01);
+        try {
+            String answer = callRaw(job, tr, "concepts", List.of(
+                    ChatMessage.system(ScriptPrompts.system(runtime.stdlib(), c.includeBlockList ? blockList.get() : null)),
+                    ChatMessage.user(ScriptPrompts.concepts(runtime.stdlib(), prompt, scaleHint(job.mode, runtime.stdlib()), n))),
+                    conceptEffort(job), job.mode.maxTokens, true);
+            List<Concepts.Concept> list = Concepts.parse(answer, n);
+            tr.note("concepts", list.isEmpty() ? "unreadable:\n" + answer
+                    : String.join("\n\n", list.stream().map(Concepts.Concept::forPrompt).toList()));
+            if (!list.isEmpty()) {
+                say(job, "<gray>Замысел: <white><v0></white>.</gray>", String.join(" / ", list.stream().map(Concepts.Concept::name).toList()));
+            }
+            return list;
+        } catch (CancelledException e) {
+            throw e;
+        } catch (Exception e) {
+            // the concepts only steer the candidates; without them the build goes on from the plain request
+            plugin.getLogger().log(Level.WARNING, "concept call failed", e);
+            tr.note("concepts", "failed: " + e);
+            return List.of();
+        }
+    }
+
+    /** The concept call is the plan of a script build: the mode's plan effort when it thinks, else script.concept-effort. */
+    private String conceptEffort(Job job) {
+        String plan = job.mode.effortPlan;
+        return plan != null && !plan.equals("off") ? plan : cfg.get().conceptEffort;
+    }
+
     /** Writes and runs one script, feeding failures back as tracebacks; null when it never runs. */
-    private ScriptCandidate writeScript(Job job, Transcript tr, String prompt, long seed, String tag, ScriptRuntime runtime,
+    private ScriptCandidate writeScript(Job job, Transcript tr, String prompt, String concept, long seed, String tag, ScriptRuntime runtime,
                                         ScriptRuntime.Budget budget, int[] safety, Consumer<ScriptResult> show) throws Exception {
         PluginConfig c = cfg.get();
         List<ChatMessage> msgs = new ArrayList<>();
         msgs.add(ChatMessage.system(ScriptPrompts.system(runtime.stdlib(), c.includeBlockList ? blockList.get() : null)));
-        msgs.add(ChatMessage.user(ScriptPrompts.create(runtime.stdlib(), prompt, scaleHint(job.mode, runtime.stdlib()))));
+        msgs.add(ChatMessage.user(ScriptPrompts.create(runtime.stdlib(), prompt, scaleHint(job.mode, runtime.stdlib()), concept)));
         for (int attempt = 0; attempt <= c.scriptRepairAttempts; attempt++) {
             LiveScript live = show == null ? null : new LiveScript(runtime, seed, safety, budget, job.cancelled, side,
                     partial -> {
@@ -370,7 +412,7 @@ public final class BuildPipeline {
                 if (show != null) show.accept(result);
                 JsonObject plan = planFromScript(result, prompt);
                 return new ScriptCandidate(source, result, seed, plan,
-                        StructureAnalyzer.analyze(result.model(), info, analyzerOptions(plan)));
+                        StructureAnalyzer.analyze(result.model(), info, analyzerOptions(plan)), concept);
             }
             checkCancelled(job);
             plugin.getLogger().info("[" + tag + "] attempt " + attempt + " failed: " + result.error().message());
@@ -592,7 +634,8 @@ public final class BuildPipeline {
         job.status("Арт-директор выбирает, что доработать…", 0.5);
         String evidence = withAutoNotes(job, rep.toText());
         String dirAnswer = callRaw(job, tr, "director", List.of(ChatMessage.system(system),
-                ChatMessage.user(ScriptPrompts.director(prompt, table.toString(), evidence, max), List.of(sheet(model)))), effort, 30000, true);
+                ChatMessage.user(ScriptPrompts.director(prompt, job.concept, table.toString(), evidence, max, refine(job)),
+                        List.of(sheet(model)))), effort, 30000, true);
         List<String[]> picks = new ArrayList<>();
         try {
             JsonObject o = JsonParser.parseString(dirAnswer.substring(dirAnswer.indexOf('{'), dirAnswer.lastIndexOf('}') + 1)).getAsJsonObject();
@@ -707,6 +750,11 @@ public final class BuildPipeline {
         return out;
     }
 
+    /** Whether this job's sculptors refine parts rather than redesign them. */
+    private boolean refine(Job job) {
+        return job.sculptRefine != null ? job.sculptRefine : cfg.get().sculptRefine;
+    }
+
     private static String leaf(String path) {
         return path.substring(path.lastIndexOf('/') + 1);
     }
@@ -723,7 +771,7 @@ public final class BuildPipeline {
         String bounds = part.cells() + " blocks, x " + part.bounds()[0] + ".." + part.bounds()[3] + ", y " + part.bounds()[1] + ".."
                 + part.bounds()[4] + ", z " + part.bounds()[2] + ".." + part.bounds()[5];
         List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
-                ChatMessage.user(ScriptPrompts.sculptor(prompt, name, bounds, brief, current, source, true), List.of(img))));
+                ChatMessage.user(ScriptPrompts.sculptor(prompt, job.concept, name, bounds, brief, current, source, true, refine(job)), List.of(img))));
         String answer = callText(job, tr, tag, effort, msgs, null, stop);
         for (int attempt = 0; attempt < 2; attempt++) {
             ScriptPatch.Result patch = ScriptPatch.replacePart(source, name, answer);
@@ -1745,10 +1793,10 @@ public final class BuildPipeline {
      * {@code tools/blind_ballot.py} turns any number of these into one blind human ballot.
      */
     /** Pipelines /aib bench create can compare. */
-    public static final List<String> BENCH_VARIANTS = List.of("script-v2", "script-v3", "compiled");
+    public static final List<String> BENCH_VARIANTS = List.of("script-v2", "script-v3", "script-v3.1", "compiled");
 
     public String startCreateBench(String prompt, BuildMode mode) {
-        return startCreateBench(prompt, mode, "script-v2", "script-v3");
+        return startCreateBench(prompt, mode, "script-v2", "script-v3.1");
     }
 
     public String startCreateBench(String prompt, BuildMode mode, String va, String vb) {
@@ -1780,6 +1828,14 @@ public final class BuildPipeline {
                 BuildMode.STANDARD.equals(m.id) ? 60000 : m.maxTokens, m.parallelReview);
     }
 
+    /** The 3.0 efforts as first shipped: no plan thinking, medium (standard) or high (extra) scripts, 120k/200k tokens. */
+    private static BuildMode v3Mode(BuildMode m) {
+        boolean std = BuildMode.STANDARD.equals(m.id), extra = BuildMode.EXTRA.equals(m.id);
+        if (!std && !extra) return m;
+        return new BuildMode(m.id, m.title, m.eta, std ? "off" : "low", std ? "medium" : "high", m.effortReview,
+                m.effortReviewFollowup, m.effortEdit, m.verifyRounds, m.editVerifyRounds, std ? 120000 : 200000, m.parallelReview);
+    }
+
     private Future<Variant> benchVariant(Job job, String id, String name, String prompt) {
         PluginConfig c = cfg.get();
         return side.submit(() -> {
@@ -1796,10 +1852,16 @@ public final class BuildPipeline {
                 });
             }
             boolean v2 = name.equals("script-v2");
-            return runVariant(job, id, name, new VoxelModel(), new JsonObject(), v2 ? v2Mode(job.mode) : job.mode, (cj, ctr, m) -> {
+            return runVariant(job, id, name, new VoxelModel(), new JsonObject(), v2 ? v2Mode(job.mode) : name.equals("script-v3") ? v3Mode(job.mode) : job.mode, (cj, ctr, m) -> {
                 if (v2) {
                     cj.stdlib = dev.aibuild.script.Stdlib.V1;
                     cj.criticRounds = Math.min(2, c.criticRounds(cj.mode.id) + 1);
+                }
+                // 3.0 as first shipped: its efforts, no design concepts, sculptors redesign their part; 3.1 adds both
+                boolean v31 = name.equals("script-v3.1");
+                if (name.startsWith("script-v3")) {
+                    cj.concepts = v31;
+                    cj.sculptRefine = v31;
                 }
                 Staged st = designAndScript(cj, ctr, prompt, null, null, false);
                 Verdict v = cj.script != null ? verifyScript(cj, ctr, null, st, prompt) : new Verdict();

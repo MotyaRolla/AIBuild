@@ -84,6 +84,30 @@ What the renders and transcripts showed:
   share a time limit (`script.sculpt-timeout`, 600 s); a sculptor still working then is stopped and its part
   stays as it was. The limit favours the rewrite: a 10-minute house rewrite is kept, and the critic is skipped.
 
+## 3.1: design concepts and refining sculptors
+
+- **Concepts:** before the candidates are written, one call writes a short design brief per candidate. Each brief
+  covers size, layout, 3–5 signature details, palette and kits.
+  - Everything the request states is kept, and the briefs vary only what it leaves open.
+  - With two candidates, the briefs must differ in layout and silhouette, so the judge chooses between two ideas,
+    not two samples of one.
+  - The chosen brief also goes to the art director and the sculptors.
+  - The call uses the mode's `plan` effort, or `script.concept-effort` (high) when that is off.
+  - It is on in standard and extra (`script.concepts`). A failed or unreadable answer falls back to the plain request.
+- **Refining sculptors** (`script.sculpt-style: refine`): a sculptor keeps its part's masses, footprint, roof forms
+  and kit calls, and adds craft on top. This targets two things seen in bench-d2c825: the hand-rolled jagged ridge,
+  and the 10-minute house rewrite. `rewrite` restores 3.0 behaviour.
+- **Thinking:**
+  - standard thinks at `max` for the concepts and `high` for the scripts (3.0: none and `medium`);
+  - extra thinks at `max` for both;
+  - both modes get 300k output tokens per call.
+- **Bench variants:**
+  - `script-v3` is 3.0 as first shipped: no concepts, redesigning sculptors;
+  - `script-v3.1` has both;
+  - `/aib bench` now compares `script-v2` with `script-v3.1` by default.
+- **Measured effort in bench-d2c825:** a design at `medium` thought 24k–51k tokens (4–5 min). A sculptor at `low`
+  still thought 96k tokens (10 min). The gateway's effort levels steer the length of thinking only loosely.
+
 ## Limitations
 
 - **Unproven:** none of the new kits or the sculptor stage has a human ballot yet. 3.0 becomes "better" only

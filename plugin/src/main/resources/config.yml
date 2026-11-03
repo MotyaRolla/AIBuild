@@ -74,6 +74,16 @@ script:
     standard: 3
     extra: 5
   sculpt-effort: low         # reasoning of the art director and the sculptors
+  sculpt-style: refine       # refine = keep the part's structure and kits, add craft; rewrite = redesign the part
+  # before the candidates are written, a lead designer writes one short design concept per candidate (layout,
+  # size, signature details, palette), so the candidates try different ideas; what the request states is kept
+  # (1 = on, 0 = off)
+  concepts:
+    fast: 0
+    light: 0
+    standard: 1
+    extra: 1
+  concept-effort: high       # reasoning of the concept call when the mode's plan effort is off (else that is used)
   sculpt-timeout: 600        # seconds for all sculptors; a slower one is stopped and its part stays as it was
 
 vision:
@@ -84,7 +94,7 @@ vision:
 
 # Thinking modes. Players pick one with /aib mode <id>, or per request: /aib create --mode extra ...
 # Reasoning effort per pipeline role: off | low | medium | high | xhigh | max
-#   plan            design brief            build   each construction stage
+#   plan            design brief (script builds: the design concepts)    build   each construction stage / the build scripts
 #   review          first self-review round (3 parallel experts: structure / exterior / interior)
 #   review-followup later fix-up rounds     edit    change requests (/aib edit, chat mode)
 # verify-rounds: max self-review rounds (stops early once all reviewers approve and checks pass)
@@ -116,26 +126,26 @@ modes:
   standard:
     title: "Стандарт"
     eta: "время зависит от сложности"
-    plan: "off"
-    build: medium
+    plan: max
+    build: high
     review: low
     review-followup: low
     edit: low
     verify-rounds: 3
     edit-verify-rounds: 1
-    max-tokens: 120000
+    max-tokens: 300000
     parallel-review: false
   extra:
     title: "Экстра-думание"
     eta: "время зависит от сложности"
-    plan: low
-    build: high
+    plan: max
+    build: max
     review: high
     review-followup: low
     edit: high
     verify-rounds: 3
     edit-verify-rounds: 2
-    max-tokens: 200000
+    max-tokens: 300000
 
 bench:
   judge-effort: high         # reasoning of the blind judge in /aib bench

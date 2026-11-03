@@ -66,6 +66,10 @@ public final class Job {
     /** A quiet sub-job (benchmark variant) sharing the cancel flag and limits, with its own token accounting. */
     /** Critic rounds for this job instead of the mode's configured count (benchmarks of older pipelines). */
     public volatile Integer criticRounds;
+    /** Design concepts and refining sculptors for this job instead of the configured choice (benchmarks); null = config. */
+    public volatile Boolean concepts, sculptRefine;
+    /** The design concept the chosen script follows, null when there was none. */
+    public volatile String concept;
 
     public Job child(String suffix) {
         return child(suffix, mode);
