@@ -614,22 +614,33 @@ public final class BuildPipeline {
         job.status("Скульпторы дорабатывают части: " + clip(String.join(", ", picks.stream().map(q -> q[0]).toList()), 60) + "…", 0.58);
         int crit0 = rep.count(dev.aibuild.analysis.Severity.CRITICAL), maj0 = rep.count(dev.aibuild.analysis.Severity.MAJOR);
         List<Future<PartRewrite>> futures = new ArrayList<>();
+        // one stop flag per sculptor: set when the job is cancelled or the sculptors' time is up
+        List<java.util.concurrent.atomic.AtomicBoolean> stops = new ArrayList<>();
         for (int i = 0; i < picks.size(); i++) {
             String name = picks.get(i)[0], brief = picks.get(i)[1], tag = "sculpt" + (i + 1);
             ScriptResult.Part part = parts.get(name);
+            var stop = new java.util.concurrent.atomic.AtomicBoolean();
+            stops.add(stop);
             futures.add(side.submit(() -> sculptPart(job, tr, tag, effort, prompt, system, runtime, budget, limits, source, model,
-                    part, brief, aopts, crit0, maj0)));
+                    part, brief, aopts, crit0, maj0, stop)));
         }
+        long deadline = System.nanoTime() + c.sculptTimeout * 1_000_000_000L;
         List<PartRewrite> ok = new ArrayList<>();
-        for (Future<PartRewrite> f : futures) {
-            try {
-                PartRewrite r = await(f, job);
-                if (r != null) ok.add(r);
-            } catch (CancelledException e) {
-                throw e;
-            } catch (Exception e) {
-                plugin.getLogger().log(Level.WARNING, "sculptor failed", e);
+        try {
+            for (int i = 0; i < futures.size(); i++) {
+                try {
+                    PartRewrite r = awaitUntil(futures.get(i), job, deadline);
+                    if (r != null) ok.add(r);
+                } catch (java.util.concurrent.TimeoutException e) {
+                    tr.note("sculpt" + (i + 1) + " timed out", picks.get(i)[0] + ": still working after " + c.sculptTimeout + " s, part left as it was");
+                } catch (CancelledException e) {
+                    if (job.cancelled.get()) throw e;
+                } catch (Exception e) {
+                    plugin.getLogger().log(Level.WARNING, "sculptor failed", e);
+                }
             }
+        } finally {
+            stops.forEach(f -> f.set(true));
         }
         if (ok.isEmpty()) {
             say(job, "<gray>Доработка частей не удалась, оставляем как было.</gray>");
@@ -704,7 +715,7 @@ public final class BuildPipeline {
     private PartRewrite sculptPart(Job job, Transcript tr, String tag, String effort, String prompt, String system,
                                    ScriptRuntime runtime, ScriptRuntime.Budget budget, int[] limits, String source,
                                    VoxelModel model, ScriptResult.Part part, String brief, AnalyzerOptions aopts,
-                                   int crit0, int maj0) throws Exception {
+                                   int crit0, int maj0, java.util.concurrent.atomic.AtomicBoolean stop) throws Exception {
         String name = leaf(part.name());
         String current = ScriptPatch.partSource(source, name);
         if (current == null) return null;
@@ -713,7 +724,7 @@ public final class BuildPipeline {
                 + part.bounds()[4] + ", z " + part.bounds()[2] + ".." + part.bounds()[5];
         List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
                 ChatMessage.user(ScriptPrompts.sculptor(prompt, name, bounds, brief, current, source, true), List.of(img))));
-        String answer = callText(job, tr, tag, effort, msgs);
+        String answer = callText(job, tr, tag, effort, msgs, null, stop);
         for (int attempt = 0; attempt < 2; attempt++) {
             ScriptPatch.Result patch = ScriptPatch.replacePart(source, name, answer);
             String problem;
@@ -739,7 +750,7 @@ public final class BuildPipeline {
             msgs = new ArrayList<>(msgs);
             msgs.add(ChatMessage.assistant(answer));
             msgs.add(ChatMessage.user(ScriptPrompts.revisionFailed(problem)));
-            answer = callText(job, tr, tag + "-fix", effort, msgs);
+            answer = callText(job, tr, tag + "-fix", effort, msgs, null, stop);
         }
         return null;
     }
@@ -2359,12 +2370,20 @@ public final class BuildPipeline {
      * lowers reasoning when the whole budget went into thinking. Returns the answer text.
      */
     private String callText(Job job, Transcript tr, String tag, String effort, List<ChatMessage> msgs) throws Exception {
-        return callText(job, tr, tag, effort, msgs, null);
+        return callText(job, tr, tag, effort, msgs, null, null);
     }
 
-    /** As above; {@code live} additionally receives the streamed answer text (see {@link LiveScript}). */
     private String callText(Job job, Transcript tr, String tag, String effort, List<ChatMessage> msgs,
                             StreamListener live) throws Exception {
+        return callText(job, tr, tag, effort, msgs, live, null);
+    }
+
+    /**
+     * As above; {@code live} additionally receives the streamed answer text (see {@link LiveScript}). A non-null
+     * {@code stop} replaces the job's cancel flag for the call (the caller sets it on cancel too).
+     */
+    private String callText(Job job, Transcript tr, String tag, String effort, List<ChatMessage> msgs,
+                            StreamListener live, java.util.concurrent.atomic.AtomicBoolean stop) throws Exception {
         PluginConfig c = cfg.get();
         String eff = effort;
         String lastErr = null;
@@ -2386,11 +2405,12 @@ public final class BuildPipeline {
                     public void onText(CharSequence text) {
                         if (live != null) live.onText(text);
                     }
-                }, job.cancelled);
+                }, stop != null ? stop : job.cancelled);
             } catch (LlmException e) {
                 if ("cancelled".equals(e.code()) || job.cancelled.get()) throw new CancelledException();
                 throw e;
             }
+            if (stop != null && stop.get()) throw new CancelledException();
             job.promptTokens.addAndGet(res.promptTokens());
             job.completionTokens.addAndGet(res.completionTokens());
             job.cachedTokens.addAndGet(res.cachedTokens());
@@ -2584,6 +2604,22 @@ public final class BuildPipeline {
                 return f.get(500, TimeUnit.MILLISECONDS);
             } catch (java.util.concurrent.TimeoutException ignored) {
                 // poll again
+            } catch (java.util.concurrent.ExecutionException e) {
+                Throwable c = e.getCause();
+                if (c instanceof Exception ex) throw ex;
+                throw new RuntimeException(c);
+            }
+        }
+    }
+
+    /** As {@link #await} but gives up at {@code deadline} ({@link System#nanoTime()}) without cancelling {@code f}. */
+    private static <T> T awaitUntil(Future<T> f, Job job, long deadline) throws Exception {
+        while (true) {
+            if (job.cancelled.get()) throw new CancelledException();
+            try {
+                return f.get(Math.min(500, Math.max(0, (deadline - System.nanoTime()) / 1_000_000)), TimeUnit.MILLISECONDS);
+            } catch (java.util.concurrent.TimeoutException e) {
+                if (deadline - System.nanoTime() <= 0) throw e;
             } catch (java.util.concurrent.ExecutionException e) {
                 Throwable c = e.getCause();
                 if (c instanceof Exception ex) throw ex;

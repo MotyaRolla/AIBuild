@@ -74,6 +74,7 @@ script:
     standard: 3
     extra: 5
   sculpt-effort: low         # reasoning of the art director and the sculptors
+  sculpt-timeout: 240        # seconds for all sculptors; a slower one is stopped and its part stays as it was
 
 vision:
   enabled: true              # send renders to the AI (checked once per session with a test image)

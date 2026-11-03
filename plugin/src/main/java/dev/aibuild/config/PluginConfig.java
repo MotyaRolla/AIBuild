@@ -66,6 +66,8 @@ public final class PluginConfig {
     private final Map<String, Integer> sculptors;
     /** Reasoning effort of the art director and the part sculptors. */
     public final String sculptEffort;
+    /** Seconds the sculptors get together; a sculptor still working then is stopped and its part left as it was. */
+    public final int sculptTimeout;
     /** Send renders to the model (critic, judge) when the gateway delivers images. */
     public final boolean visionEnabled;
     /** Use the pairwise vision judge to pick candidates and accept critic revisions. */
@@ -148,6 +150,7 @@ public final class PluginConfig {
         reviewDeadline = perMode(c, "script.review-deadline", Map.of("fast", 0, "light", 0, "standard", 780, "extra", 0), 0, 7200);
         sculptors = perMode(c, "script.sculptors", Map.of("fast", 0, "light", 0, "standard", 3, "extra", 5), 0, 8);
         sculptEffort = c.getString("script.sculpt-effort", "low");
+        sculptTimeout = Math.clamp(c.getInt("script.sculpt-timeout", 240), 30, 3600);
         visionEnabled = c.getBoolean("vision.enabled", true);
         visionJudge = c.getBoolean("vision.judge", true);
         visionImageSize = Math.clamp(c.getInt("vision.image-size", 1536), 256, 2048);

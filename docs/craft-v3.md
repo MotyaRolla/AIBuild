@@ -42,7 +42,47 @@ spent.
 
 ## Measured live
 
-See the section below, added after the first bench on the server.
+Two benches on the server, both standard mode, prompt "уютный средневековый домик с садом, 14 на 11" (a cosy
+medieval cottage with a garden, 14×11), DeepSeek V4.1 Flash.
+
+| Bench | Variant | Time | Blocks | Critical / major | Critic rounds |
+|---|---|---|---|---|---|
+| bench-d22291 (before the fixes) | script-v2 | 720 s | 2720 | 0 / 1 | 2 |
+| | script-v3 | 997 s | 7171 | 0 / 2 | 1 |
+| bench-d2c825 (fixed build) | script-v2 | 521 s | 4071 | 0 / 0 | 2 |
+| | script-v3 | 983 s | 3296 | 0 / 1 | 0 (skipped at the 780 s deadline) |
+
+What the renders and transcripts showed:
+- **bench-d22291:**
+  - the v3 house was richer than v2's: branching trees, a path, hedges and a dormer;
+  - but it was swamped on a 63×55 plot, half hidden behind large oaks, so v2's plainer house read better;
+  - the director never saw `house`, because a parent part has no blocks of its own, and the house brief went to
+    the scenery part;
+  - one design crashed on `stair('dark_oak', ...)`.
+
+  Fixes:
+  - `sculptable()` offers enclosing parts;
+  - a bare wood name now means its planks;
+  - the house recipe limits the plot to 6–8 blocks beyond the walls and keeps trees out of the facade's way;
+  - the director may brief the scenery to shrink.
+- **bench-d2c825:**
+  - The director picked `house`, `setting` and `chimney`.
+  - The plot shrank to about 30×27.
+  - The v3 house is clearly better architecture: a timber frame in three depth layers, a porch on brackets, a
+    dormer, a stone chimney breast on the gable, framed windows and a fenced cottage garden.
+  - v2 is a dark box with a plain roof and a tidier, emptier garden.
+  - Remaining flaws in v3:
+    - the house sculptor hand-rolled its roof instead of calling `roof()`, which left a jagged ridge;
+    - the garden is busy;
+    - spruce trunks poked above their crowns (fixed in the kit since).
+- **Timing in bench-d2c825:**
+  - designs, gate and judge: 6 min;
+  - director: 14 s;
+  - sculptors: 73 s (setting), 164 s (chimney) and 593 s (house, one 300 KB answer).
+
+  The slow house sculptor pushed the build past the review deadline, so the critic was skipped. Sculptors now
+  share a time limit (`script.sculpt-timeout`, 240 s); a sculptor still working then is stopped and its part
+  stays as it was.
 
 ## Limitations
 
@@ -58,3 +98,6 @@ See the section below, added after the first bench on the server.
 - **Sculptors:** a sculptor may only rewrite a `part()` that is written in the script; parts created inside kits
   (`tree`, `tower`) cannot be chosen. Rewrites that grow far beyond their part are not rejected automatically.
 - **Time:** standard mode takes longer than 2.0 (medium effort plus the sculptor stage); see the measured times.
+  With `script.review-deadline` at 780 s, the critic is skipped whenever designs and sculptors run long. Set it to
+  about 1020 to always keep the critic, at about 17 minutes a build.
+- **One prompt so far:** both benches used the same cottage prompt. That is a spot check, not a verdict.

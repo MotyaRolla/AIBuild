@@ -1110,7 +1110,8 @@ function _hang(b, sp, len, n) {
 
 function _conifer(x, y, z, h, cr, sp, opts) {
     var r = opts.trunk || Math.max(0.5, h / 18);
-    place(tube([[x, y, z], [x, y + h + 1, z]], [r * 1.25, r * 0.6]), sp.log);
+    // the trunk ends inside the crown: the thin top layers cannot hide a log
+    place(tube([[x, y, z], [x, y + h - 2, z]], [r * 1.25, r * 0.6]), sp.log);
     if (r >= 0.9) _roots(x, y, z, r, sp);
     var start = y + Math.round(h * (sp.bare || 0.22)), layers = y + h + 1 - start;
     for (var i = 0; i < layers; i++) {
@@ -1125,8 +1126,7 @@ function _conifer(x, y, z, h, cr, sp, opts) {
             }
         }
     }
-    block(x, y + h + 2, z, sp.leaves);
-    block(x, y + h + 3, z, sp.leaves);
+    for (var ty = y + h - 1; ty <= y + h + 3; ty++) block(x, ty, z, sp.leaves);
     return [x - cr - 1, start, z - cr - 1, x + cr + 1, y + h + 3, z + cr + 1];
 }
 
