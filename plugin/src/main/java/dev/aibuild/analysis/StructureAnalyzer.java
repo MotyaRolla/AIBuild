@@ -765,16 +765,20 @@ public final class StructureAnalyzer {
                 }
             }
             // a body box is maximal (it cannot be widened into standing walls), hollow (walls make a shell;
-            // a solid terrain slab is scenery, not a body) and carries the most wall cells. Fragments cut
-            // out by windows are not maximal; terrain fails the hollow test.
+            // a solid terrain slab is scenery, not a body) and among those the most complete wall ring wins,
+            // with the wall mass as the tie-break. A garden pergola of logs leaning on the corner widened a
+            // live 10x10 body to 12; its box has a broken ring (0.90) while the true body's is whole (1.00).
             int[] best = null;
+            double bestRing = 0.0;
             int bestCells = -1;
             for (int[] b : boxes.values()) {
                 if (!maximalBox(b)) continue;
                 if (hollowShare(b) < 0.25) continue;
+                double ring = ringRatio(b);
                 int cells = wallCellsIn(b);
-                if (cells > bestCells) {
+                if (ring > bestRing + 0.01 || (Math.abs(ring - bestRing) <= 0.01 && cells > bestCells)) {
                     best = b;
+                    bestRing = ring;
                     bestCells = cells;
                 }
             }
@@ -801,7 +805,19 @@ public final class StructureAnalyzer {
             return best;
         }
 
-        /** The wall-like cells of one layer: opaque blocks, glass, doors, logs and wood. */
+        /**
+         * Natural ground, never a wall. Raised garden beds sit at wall level, are occluding, and touch the
+         * house — a live build measured a 10&times;10 body as 12 wide because a podzol bed at y=1 leaned on the
+         * wall and joined its component. Masonry (stone bricks, cobblestone, terracotta, planks) stays in the
+         * wall mask; raw terrain does not.
+         */
+        private static final java.util.Set<String> NATURAL_GROUND = java.util.Set.of(
+                "grass_block", "dirt", "coarse_dirt", "rooted_dirt", "podzol", "mycelium", "moss_block",
+                "sand", "red_sand", "gravel", "clay", "mud", "stone", "granite", "diorite", "andesite",
+                "tuff", "calcite", "deepslate", "snow_block", "ice", "packed_ice", "dirt_path",
+                "farmland", "azalea");
+
+        /** The wall-like cells of one layer: opaque blocks, glass, doors, logs and wood — but not terrain. */
         private boolean[] layerWall(int y, int sx, int sz) {
             boolean[] wall = new boolean[sx * sz];
             for (int z = minZ; z <= maxZ; z++) {
@@ -809,6 +825,7 @@ public final class StructureAnalyzer {
                     BlockSpec s = g.raw(x, y, z);
                     if (s == null || s.isAir()) continue;
                     String nm = s.name();
+                    if (NATURAL_GROUND.contains(nm)) continue;
                     wall[(z - minZ) * sx + (x - minX)] = info.isOccluding(s) || nm.contains("glass")
                             || nm.endsWith("_door") || nm.endsWith("_log") || nm.endsWith("_wood");
                 }
@@ -903,7 +920,7 @@ public final class StructureAnalyzer {
         private boolean maximalBox(int[] fp) {
             int yLo = Math.max(1, minY);
             int yHi = Math.min(maxY, 5);
-            double outside = 0.30;
+            double outside = 0.60;
             for (int y = yLo; y <= yHi; y++) {
                 boolean[] wall = layerWall(y, maxX - minX + 1, maxZ - minZ + 1);
                 int sx = maxX - minX + 1;

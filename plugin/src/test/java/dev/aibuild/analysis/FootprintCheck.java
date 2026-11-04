@@ -101,6 +101,38 @@ class FootprintCheck {
         assertEquals(10, fz);
     }
 
+    /** A garden pergola of logs leaning on the corner: not the body, even though it is wall-like. */
+    @Test
+    void aLogPergolaBesideTheHouseIsNotTheBody() {
+        VoxelModel m = house();
+        // three log columns right against the east wall, spanning y=1..3 (a live build had exactly this)
+        for (int z = 2; z <= 4; z++) {
+            for (int y = 1; y <= 3; y++) {
+                m.set(10, y, z, BlockSpec.of("oak_log"));
+                m.set(11, y, z, BlockSpec.of("spruce_log"));
+            }
+        }
+        AnalysisReport rep = analyze(m, 10, 10);
+        int fx = (int) rep.metrics.get("footprintX");
+        int fz = (int) rep.metrics.get("footprintZ");
+        assertTrue(Math.abs(fx - 10) <= 1, "the pergola must not widen the body: footprintX=" + fx);
+        assertEquals(10, fz);
+    }
+
+    /** A raised podzol garden bed at wall level, occluding and touching the wall. */
+    @Test
+    void aRaisedGardenBedIsNotAWall() {
+        VoxelModel m = house();
+        for (int x = 10; x <= 12; x++) {
+            for (int z = 0; z <= 9; z++) {
+                m.set(x, 1, z, BlockSpec.of("podzol"));
+            }
+        }
+        AnalysisReport rep = analyze(m, 10, 10);
+        int fx = (int) rep.metrics.get("footprintX");
+        assertTrue(Math.abs(fx - 10) <= 1, "the garden bed must not widen the body: footprintX=" + fx);
+    }
+
     @Test
     void aWrongFootprintIsStillReported() {
         // the same house checked against an ask of 20x20 must fail — the check itself stays strict
