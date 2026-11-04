@@ -40,33 +40,76 @@ public final class ScriptPatch {
 
     public static Result apply(String source, String answer) {
         if (answer == null || answer.isBlank()) return new Result(source, "empty revision", 0, false);
-        Matcher m = HUNK.matcher(answer);
-        List<String[]> hunks = new ArrayList<>();
-        while (m.find()) hunks.add(new String[]{m.group(1), m.group(2)});
+        List<String[]> hunks = hunksOf(answer);
         if (hunks.isEmpty()) {
             String full = ScriptLint.extract(answer);
             if (full.isBlank() || !full.contains("(")) return new Result(source, "the revision contains no SEARCH/REPLACE hunks and no script", 0, false);
             return new Result(full, null, 0, true);
         }
+        return applyHunks(source, hunks, true);
+    }
+
+    /**
+     * The SEARCH/REPLACE pairs of an answer, in order; an answer without hunks yields an empty list (its
+     * revision is a complete rewrite, which cannot be applied in part).
+     */
+    public static List<String[]> hunksOf(String answer) {
+        List<String[]> hunks = new ArrayList<>();
+        if (answer == null) return hunks;
+        Matcher m = HUNK.matcher(answer);
+        while (m.find()) hunks.add(new String[]{m.group(1), m.group(2)});
+        return hunks;
+    }
+
+    /**
+     * Applies a list of hunks to a source, skipping the ones whose SEARCH text no longer matches (a hunk
+     * written against a region an earlier hunk already changed). The model writes every hunk against the
+     * same current source, so a subset applied in order is exactly the same revision with the other hunks
+     * left out — this is what lets a review keep the good hunks of a rejected revision.
+     *
+     * <p>A hunk that matches more than once, or nowhere, is skipped rather than failing the whole list;
+     * {@code strict} (used by {@link #apply}) keeps the old behaviour of failing loudly, because a
+     * whole-revision application must match exactly what the model wrote.</p>
+     */
+    public static Result applyHunks(String source, List<String[]> hunks) {
+        return applyHunks(source, hunks, false);
+    }
+
+    static Result applyHunks(String source, List<String[]> hunks, boolean strict) {
+        if (hunks == null || hunks.isEmpty()) return new Result(source, "no hunks", 0, false);
         String out = source;
+        int applied = 0;
         for (int i = 0; i < hunks.size(); i++) {
             String search = hunks.get(i)[0], replace = hunks.get(i)[1];
             if (search.isBlank()) {
                 out = out.endsWith("\n") ? out + replace + "\n" : out + "\n" + replace + "\n";
+                applied++;
                 continue;
             }
             int first = out.indexOf(search);
             if (first >= 0) {
-                if (out.indexOf(search, first + 1) >= 0) return new Result(source, "hunk " + (i + 1) + " matches more than once; include more context lines", hunks.size(), false);
+                if (out.indexOf(search, first + 1) >= 0) {
+                    if (strict) return new Result(source, "hunk " + (i + 1) + " matches more than once; include more context lines", hunks.size(), false);
+                    continue;
+                }
                 out = out.substring(0, first) + replace + out.substring(first + search.length());
+                applied++;
                 continue;
             }
             int[] loose = looseMatch(out, search);
-            if (loose == null) return new Result(source, "hunk " + (i + 1) + " SEARCH text was not found:\n" + clip(search), hunks.size(), false);
-            if (loose[0] < 0) return new Result(source, "hunk " + (i + 1) + " matches more than once; include more context lines", hunks.size(), false);
+            if (loose == null) {
+                if (strict) return new Result(source, "hunk " + (i + 1) + " SEARCH text was not found:\n" + clip(search), hunks.size(), false);
+                continue;
+            }
+            if (loose[0] < 0) {
+                if (strict) return new Result(source, "hunk " + (i + 1) + " matches more than once; include more context lines", hunks.size(), false);
+                continue;
+            }
             out = out.substring(0, loose[0]) + replace + out.substring(loose[1]);
+            applied++;
         }
-        return new Result(out, null, hunks.size(), false);
+        if (strict) return new Result(out, null, hunks.size(), false);
+        return new Result(out, null, applied, false);
     }
 
     /** Line-wise match ignoring surrounding whitespace; returns {start,end} offsets, {-1,-1} if ambiguous, or null. */

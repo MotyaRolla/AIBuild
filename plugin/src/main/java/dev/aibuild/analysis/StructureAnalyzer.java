@@ -49,6 +49,15 @@ public final class StructureAnalyzer {
     /** Padding around the non-air bounding box; 2 keeps the "outside" flood fill and facade rays valid. */
     private static final int PAD = 2;
 
+    /**
+     * How far a measured body size may sit from the asked size: a proportion of the ask, never less than one
+     * block. A real fachwerk house measured 11 wide against an asked 10 because a porch column survives the
+     * trim; an exact-equality demand for small builds turned that into a false defect.
+     */
+    static int sizeToleranceFor(int expected) {
+        return Math.max(1, Math.round(expected * 0.08f));
+    }
+
     /** Maximum number of floating components reported individually. */
     private static final int MAX_FLOATING_REPORTS = 4;
     /** Volume threshold for a connected interior pocket to count as a room. */
@@ -297,6 +306,9 @@ public final class StructureAnalyzer {
                     int c = queue.poll();
                     comp.add(c, g);
                     int y = g.yOf(c), z = g.zOf(c), x = g.xOf(c);
+                    // every floating cell, so the finisher can settle or remove whole loose clusters;
+                    // comp.samples is capped at Issue.MAX_SAMPLES and would only show the first few
+                    mark("floating_all", x, y, z);
                     for (int d = 0; d < 18; d++) {
                         int nx = x + NX[d], ny = y + NY[d], nz = z + NZ[d];
                         if (!g.contains(nx, ny, nz)) continue;
@@ -690,10 +702,24 @@ public final class StructureAnalyzer {
         private int[] wallFootprintCache;
 
         /**
-         * Footprint of the main body: over the layers y = 1..5, the bounding box of the largest 4-connected
-         * (in x/z) component of wall-like blocks (opaque blocks, glass, doors, logs). Garden props, fences,
-         * wells and paths form separate or non-wall components, so they no longer inflate the footprint.
-         * Falls back to the plain bounding box of the lowest non-empty layer.
+         * Footprint of the main body: a box that looks like a walled body, chosen from candidates gathered
+         * over the wall layers y = 1..5 (opaque blocks, glass, doors, logs).
+         *
+         * <p>A live run exposed the old selection: a fachwerk house whose ring is cut by open windows at one
+         * level produced a largest per-layer component of 24 cells (a wall fragment), and the vote tie-break
+         * "smallest area wins" then reported a 2&times;6 footprint for a 10&times;10 house, failing the size
+         * check. Two changes fix that:</p>
+         * <ol>
+         *   <li>a candidate from the <b>union</b> of the wall layers: a ring cut by windows at one level is
+         *       still connected across the others;</li>
+         *   <li>candidates must be <b>maximal</b> ({@link #maximalBox(int[])}): the line just outside each
+         *       side is mostly not wall, so a box that could be widened into standing walls (a trimmed
+         *       fragment that stops short of the outer wall) is rejected. Among the maximal boxes the one
+         *       with the most wall cells inside wins — the mass of the body, not a fragment of it.</li>
+         * </ol>
+         * Garden props, fences, wells and paths form separate or non-wall components, and thin protrusions
+         * are stripped by the trim, so they do not inflate the footprint. When no candidate is maximal the
+         * union box is used, then the bounding box of the lowest non-empty layer.
          */
         private int[] wallFootprint() {
             if (wallFootprintCache != null) return wallFootprintCache.length == 0 ? null : wallFootprintCache;
@@ -701,45 +727,21 @@ public final class StructureAnalyzer {
             int[] queue = new int[sx * sz];
             java.util.Map<String, int[]> boxes = new java.util.LinkedHashMap<>();
             java.util.Map<String, Integer> votes = new java.util.HashMap<>();
+            boolean[] union = new boolean[sx * sz];
+            boolean anyUnion = false;
             for (int y = Math.max(1, minY); y <= Math.min(maxY, 5); y++) {
-                boolean[] wall = new boolean[sx * sz];
-                for (int z = minZ; z <= maxZ; z++) {
-                    for (int x = minX; x <= maxX; x++) {
-                        BlockSpec s = g.raw(x, y, z);
-                        if (s == null || s.isAir()) continue;
-                        String nm = s.name();
-                        wall[(z - minZ) * sx + (x - minX)] = info.isOccluding(s) || nm.contains("glass")
-                                || nm.endsWith("_door") || nm.endsWith("_log") || nm.endsWith("_wood");
+                boolean[] wall = layerWall(y, sx, sz);
+                for (int i = 0; i < wall.length; i++) {
+                    if (wall[i]) {
+                        union[i] = true;
+                        anyUnion = true;
                     }
                 }
-                boolean[] seen = new boolean[sx * sz];
-                boolean[] bestMask = null;
-                int bestSize = 0;
-                for (int start = 0; start < wall.length; start++) {
-                    if (!wall[start] || seen[start]) continue;
-                    int head = 0, tail = 0;
-                    queue[tail++] = start;
-                    seen[start] = true;
-                    while (head < tail) {
-                        int c = queue[head++];
-                        int cx = c % sx, cz = c / sx;
-                        int[][] nb = {{cx + 1, cz}, {cx - 1, cz}, {cx, cz + 1}, {cx, cz - 1}};
-                        for (int[] q : nb) {
-                            if (q[0] < 0 || q[1] < 0 || q[0] >= sx || q[1] >= sz) continue;
-                            int ni = q[1] * sx + q[0];
-                            if (wall[ni] && !seen[ni]) {
-                                seen[ni] = true;
-                                queue[tail++] = ni;
-                            }
-                        }
-                    }
-                    if (tail > bestSize) {
-                        bestSize = tail;
-                        bestMask = new boolean[sx * sz];
-                        for (int k = 0; k < tail; k++) bestMask[queue[k]] = true;
-                    }
-                }
-                if (bestMask == null || bestSize < 8) continue;
+                boolean[] bestMask = largestComponent(wall, sx, sz, queue);
+                if (bestMask == null) continue;
+                int size = 0;
+                for (boolean b : bestMask) if (b) size++;
+                if (size < 8) continue;
                 int[] box = trimmedBox(bestMask, sx, sz);
                 if (box == null) continue;
                 int[] world = {box[0] + minX, box[1] + minX, box[2] + minZ, box[3] + minZ};
@@ -747,17 +749,48 @@ public final class StructureAnalyzer {
                 boxes.putIfAbsent(key, world);
                 votes.merge(key, 1, Integer::sum);
             }
+            // every component of the union of the layers becomes a candidate: a ring cut by windows at one
+            // level stays connected across the others, and a building that shares its plot with a raised
+            // lawn is a candidate of its own instead of losing the "largest component" vote to the lawn
+            int[] unionBox = null;
+            if (anyUnion) {
+                for (boolean[] comp : components(union, sx, sz, queue, 8)) {
+                    int[] box = trimmedBox(comp, sx, sz);
+                    if (box == null) continue;
+                    int[] world = {box[0] + minX, box[1] + minX, box[2] + minZ, box[3] + minZ};
+                    String key = world[0] + "," + world[1] + "," + world[2] + "," + world[3];
+                    boxes.putIfAbsent(key, world);
+                    votes.merge(key, 1, Integer::sum);
+                    if (unionBox == null) unionBox = world;
+                }
+            }
+            // a body box is maximal (it cannot be widened into standing walls), hollow (walls make a shell;
+            // a solid terrain slab is scenery, not a body) and carries the most wall cells. Fragments cut
+            // out by windows are not maximal; terrain fails the hollow test.
             int[] best = null;
-            int bestVotes = -1;
-            long bestArea = Long.MAX_VALUE;
-            for (java.util.Map.Entry<String, int[]> e : boxes.entrySet()) {
-                int v = votes.get(e.getKey());
-                int[] b = e.getValue();
-                long area = (long) (b[1] - b[0] + 1) * (b[3] - b[2] + 1);
-                if (v > bestVotes || (v == bestVotes && area < bestArea)) {
+            int bestCells = -1;
+            for (int[] b : boxes.values()) {
+                if (!maximalBox(b)) continue;
+                if (hollowShare(b) < 0.25) continue;
+                int cells = wallCellsIn(b);
+                if (cells > bestCells) {
                     best = b;
-                    bestVotes = v;
-                    bestArea = area;
+                    bestCells = cells;
+                }
+            }
+            if (best == null && unionBox != null) best = unionBox;
+            if (best == null) {
+                int bestVotes = -1;
+                long bestArea = Long.MAX_VALUE;
+                for (java.util.Map.Entry<String, int[]> e : boxes.entrySet()) {
+                    int v = votes.get(e.getKey());
+                    int[] b = e.getValue();
+                    long area = (long) (b[1] - b[0] + 1) * (b[3] - b[2] + 1);
+                    if (v > bestVotes || (v == bestVotes && area < bestArea)) {
+                        best = b;
+                        bestVotes = v;
+                        bestArea = area;
+                    }
                 }
             }
             if (best == null) {
@@ -766,6 +799,188 @@ public final class StructureAnalyzer {
             }
             wallFootprintCache = best == null ? new int[0] : best;
             return best;
+        }
+
+        /** The wall-like cells of one layer: opaque blocks, glass, doors, logs and wood. */
+        private boolean[] layerWall(int y, int sx, int sz) {
+            boolean[] wall = new boolean[sx * sz];
+            for (int z = minZ; z <= maxZ; z++) {
+                for (int x = minX; x <= maxX; x++) {
+                    BlockSpec s = g.raw(x, y, z);
+                    if (s == null || s.isAir()) continue;
+                    String nm = s.name();
+                    wall[(z - minZ) * sx + (x - minX)] = info.isOccluding(s) || nm.contains("glass")
+                            || nm.endsWith("_door") || nm.endsWith("_log") || nm.endsWith("_wood");
+                }
+            }
+            return wall;
+        }
+
+        /**
+         * All 4-connected (in x/z) components of a mask with at least {@code min} cells, largest first. The
+         * union of the wall layers can hold several real subjects — a house and the lawn it stands on — and
+         * picking only the largest would let the lawn hide the house.
+         */
+        private static List<boolean[]> components(boolean[] mask, int sx, int sz, int[] queue, int min) {
+            boolean[] seen = new boolean[mask.length];
+            List<boolean[]> out = new ArrayList<>();
+            for (int start = 0; start < mask.length; start++) {
+                if (!mask[start] || seen[start]) continue;
+                int head = 0, tail = 0;
+                queue[tail++] = start;
+                seen[start] = true;
+                int size = 1;
+                while (head < tail) {
+                    int c = queue[head++];
+                    int cx = c % sx, cz = c / sx;
+                    int[][] nb = {{cx + 1, cz}, {cx - 1, cz}, {cx, cz + 1}, {cx, cz - 1}};
+                    for (int[] q : nb) {
+                        if (q[0] < 0 || q[1] < 0 || q[0] >= sx || q[1] >= sz) continue;
+                        int ni = q[1] * sx + q[0];
+                        if (mask[ni] && !seen[ni]) {
+                            seen[ni] = true;
+                            size++;
+                            queue[tail++] = ni;
+                        }
+                    }
+                }
+                if (size < min) continue;
+                boolean[] comp = new boolean[mask.length];
+                for (int k = 0; k < tail; k++) comp[queue[k]] = true;
+                out.add(comp);
+            }
+            out.sort((a, b) -> Integer.compare(count(b), count(a)));
+            return out;
+        }
+
+        private static int count(boolean[] mask) {
+            int c = 0;
+            for (boolean b : mask) if (b) c++;
+            return c;
+        }
+
+        /**
+         * Largest 4-connected (in x/z) component of a mask, or {@code null} when the mask is empty. The
+         * queue buffer is supplied by the caller so repeated calls do not allocate.
+         */
+        private static boolean[] largestComponent(boolean[] mask, int sx, int sz, int[] queue) {
+            boolean[] seen = new boolean[mask.length];
+            boolean[] bestMask = null;
+            int bestSize = 0;
+            for (int start = 0; start < mask.length; start++) {
+                if (!mask[start] || seen[start]) continue;
+                int head = 0, tail = 0;
+                queue[tail++] = start;
+                seen[start] = true;
+                while (head < tail) {
+                    int c = queue[head++];
+                    int cx = c % sx, cz = c / sx;
+                    int[][] nb = {{cx + 1, cz}, {cx - 1, cz}, {cx, cz + 1}, {cx, cz - 1}};
+                    for (int[] q : nb) {
+                        if (q[0] < 0 || q[1] < 0 || q[0] >= sx || q[1] >= sz) continue;
+                        int ni = q[1] * sx + q[0];
+                        if (mask[ni] && !seen[ni]) {
+                            seen[ni] = true;
+                            queue[tail++] = ni;
+                        }
+                    }
+                }
+                if (tail > bestSize) {
+                    bestSize = tail;
+                    bestMask = new boolean[mask.length];
+                    for (int k = 0; k < tail; k++) bestMask[queue[k]] = true;
+                }
+            }
+            return bestMask;
+        }
+
+        /**
+         * Whether a candidate box is the tight extent of its wall mass: the line just outside each of the
+         * four sides is mostly NOT wall-like over the wall layers. A box trimmed out of a window level that
+         * stops short of the outer wall fails this — the wall stands right outside its edge — while the true
+         * body box is surrounded by air, garden or terrain.
+         */
+        private boolean maximalBox(int[] fp) {
+            int yLo = Math.max(1, minY);
+            int yHi = Math.min(maxY, 5);
+            double outside = 0.30;
+            for (int y = yLo; y <= yHi; y++) {
+                boolean[] wall = layerWall(y, maxX - minX + 1, maxZ - minZ + 1);
+                int sx = maxX - minX + 1;
+                int sz = maxZ - minZ + 1;
+                // west and east lines just outside the box
+                for (int side = 0; side < 2; side++) {
+                    int x = side == 0 ? fp[0] - 1 : fp[1] + 1;
+                    if (x < minX - 1 || x > maxX + 1) continue;
+                    int wallish = 0;
+                    int total = 0;
+                    for (int z = fp[2]; z <= fp[3]; z++) {
+                        total++;
+                        if (x >= minX && x <= maxX && z >= minZ && z <= maxZ && wall[(z - minZ) * sx + (x - minX)]) wallish++;
+                    }
+                    if (total > 0 && (double) wallish / total > outside) return false;
+                }
+                // north and south lines just outside the box
+                for (int side = 0; side < 2; side++) {
+                    int z = side == 0 ? fp[2] - 1 : fp[3] + 1;
+                    if (z < minZ - 1 || z > maxZ + 1) continue;
+                    int wallish = 0;
+                    int total = 0;
+                    for (int x = fp[0]; x <= fp[1]; x++) {
+                        total++;
+                        if (x >= minX && x <= maxX && z >= minZ && z <= maxZ && wall[(z - minZ) * sx + (x - minX)]) wallish++;
+                    }
+                    if (total > 0 && (double) wallish / total > outside) return false;
+                }
+            }
+            return true;
+        }
+
+        /**
+         * The share of air strictly inside a candidate box over the wall layers. Walls make a hollow shell;
+         * a solid terrain slab has no interior air at all, so it can never be picked as the body over a
+         * real building on the same plot.
+         */
+        private double hollowShare(int[] fp) {
+            // only up to the top of what the box actually holds: a slab that fills y=1..3 must not look
+            // hollow just because y=4..5 above it are air
+            int top = 0;
+            for (int y = Math.max(1, minY); y <= Math.min(maxY, 5); y++) {
+                for (int x = fp[0]; x <= fp[1]; x++) {
+                    for (int z = fp[2]; z <= fp[3]; z++) {
+                        if (g.contains(x, y, z) && present[g.index(x, y, z)] != 0) {
+                            top = Math.max(top, y);
+                            break;
+                        }
+                    }
+                }
+            }
+            if (top <= 0) return 0.0;
+            int inner = 0;
+            int air = 0;
+            for (int y = Math.max(1, minY); y <= top; y++) {
+                for (int x = fp[0] + 1; x <= fp[1] - 1; x++) {
+                    for (int z = fp[2] + 1; z <= fp[3] - 1; z++) {
+                        inner++;
+                        BlockSpec s = g.raw(x, y, z);
+                        if (s == null || s.isAir()) air++;
+                    }
+                }
+            }
+            return inner == 0 ? 0.0 : (double) air / inner;
+        }
+
+        /** Present cells inside a candidate box over the wall layers, used to break body-score ties. */
+        private int wallCellsIn(int[] fp) {
+            int cells = 0;
+            for (int y = Math.max(1, minY); y <= Math.min(maxY, 5); y++) {
+                for (int x = fp[0]; x <= fp[1]; x++) {
+                    for (int z = fp[2]; z <= fp[3]; z++) {
+                        if (g.contains(x, y, z) && present[g.index(x, y, z)] != 0) cells++;
+                    }
+                }
+            }
+            return cells;
         }
 
         /**
@@ -1612,6 +1827,10 @@ public final class StructureAnalyzer {
             return new int[]{fp[1] - fp[0] + 1, top == Integer.MIN_VALUE ? whole[1] : top, fp[3] - fp[2] + 1};
         }
 
+        private static int sizeTolerance(int expected) {
+            return sizeToleranceFor(expected);
+        }
+
         private void checkOverallSize() {
             int[] actual = {nonAirBounds[3] - nonAirBounds[0] + 1,
                     nonAirBounds[4] - nonAirBounds[1] + 1, nonAirBounds[5] - nonAirBounds[2] + 1};
@@ -1624,7 +1843,7 @@ public final class StructureAnalyzer {
                             "overall solid " + axes[i] + " size " + actual[i] + " exceeds maximum " + opts.maximumSize[i]));
                 }
                 if (opts.exactSize != null && opts.exactSize.length > i && opts.exactSize[i] > 0
-                        && Math.abs(subject[i] - opts.exactSize[i]) > (opts.exactSize[i] >= 20 ? Math.round(opts.exactSize[i] * 0.08f) : 0)) {
+                        && Math.abs(subject[i] - opts.exactSize[i]) > sizeTolerance(opts.exactSize[i])) {
                     issues.add(Issue.of(Severity.MAJOR, "overall_size_mismatch",
                             "the main body's " + axes[i] + " size is " + subject[i] + " but should be about " + opts.exactSize[i]
                                     + " (terrain, trees and paths around it do not count)"));

@@ -1310,6 +1310,57 @@ public final class BuildPipeline {
      * The finisher's mechanical repairs, appended to the script as its last part and kept when the script still
      * runs and nothing got worse. Null when there was nothing to repair.
      */
+    /**
+     * Keeps the hunks of a rejected revision that do not regress on their own.
+     *
+     * <p>Why: a critic revision fixes several findings at once, and one of its hunks can break something
+     * unrelated — a live review lost a correct ladder-and-loft repair because another hunk of the same answer
+     * darkened the interior, and the wholesale rejection then left the build a draft. The model writes every
+     * hunk against the same current source, so the hunks can be applied one at a time and measured: each
+     * hunk that leaves the analyzer no worse than the accepted baseline is kept, the rest are dropped. A
+     * single-hunk answer cannot be salvaged (it IS the minimal revision) and neither can a full rewrite.</p>
+     *
+     * @return the salvaged revision, or {@code null} when nothing survived
+     */
+    private Revision salvage(Job job, Transcript tr, ScriptRuntime runtime, ScriptRuntime.Budget budget, int[] limits,
+                             String source, String answer, QualityVector q, AnalyzerOptions aopts, String tag) {
+        List<String[]> hunks = ScriptPatch.hunksOf(answer);
+        if (hunks.size() < 2) return null;
+        String work = source;
+        ScriptResult run = null;
+        List<Integer> kept = new ArrayList<>();
+        for (int i = 0; i < hunks.size(); i++) {
+            if (job.cancelled.get()) return null;
+            ScriptPatch.Result patch = ScriptPatch.applyHunks(work, java.util.List.<String[]>of(hunks.get(i)));
+            if (!patch.ok()) continue;                       // its SEARCH text was changed by an earlier hunk
+            ScriptResult r;
+            try {
+                r = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
+            } catch (Exception e) {
+                continue;
+            }
+            if (!r.ok()) continue;
+            prepare(r);
+            AnalysisReport rep = StructureAnalyzer.analyze(r.model(), info, aopts);
+            if (!QualityVector.of(rep, r).regressions(q).isEmpty()) continue;
+            work = patch.source();
+            run = r;
+            kept.add(i + 1);
+        }
+        if (run == null || kept.isEmpty()) return null;
+        tr.note(tag + " salvaged", "kept hunks " + kept + " of " + hunks.size()
+                + (kept.size() == hunks.size() ? "" : "; dropped: " + dropped(hunks.size(), kept)));
+        say(job, "<gray>Правка применена частично: <white><v0></white> из <white><v1></white> правок.</gray>",
+                kept.size(), hunks.size());
+        return new Revision(work, run, diagnosis(answer));
+    }
+
+    private static String dropped(int total, List<Integer> kept) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i <= total; i++) if (!kept.contains(i)) sb.append(sb.isEmpty() ? "" : ", ").append(i);
+        return sb.toString();
+    }
+
     private Revision finish(Job job, Transcript tr, ScriptRuntime runtime, ScriptRuntime.Budget budget, int[] limits,
                             String source, ScriptResult cur, AnalyzerOptions aopts, QualityVector q) {
         Finisher.Result f = Finisher.plan(cur.model(), info, cur.collisions(), aopts.expectInterior);
@@ -1476,6 +1527,33 @@ public final class BuildPipeline {
                 else if (pref == 0 && !nq.fixesDefects(q)) gate = "no visible improvement according to the judge";
             }
             if (gate != null) {
+                // one hunk of the revision broke something unrelated: keep the hunks that are safe on their own
+                Revision salvaged = salvage(job, tr, runtime, budget, limits, source, answer, q, aopts, "critic" + round);
+                if (salvaged != null) {
+                    VoxelModel sm = salvaged.result().model();
+                    boolean judgeOk = true;
+                    if (eyes && c.visionJudge) {
+                        int pref = judge(job, tr, prompt, sheet(model), sheet(sm));
+                        judgeOk = pref >= 0;
+                        if (!judgeOk) {
+                            tr.note("critic" + round + " salvaged rejected", "the judge preferred the previous build");
+                        }
+                    }
+                    if (judgeOk) {
+                        accepted++;
+                        source = salvaged.source();
+                        model = sm;
+                        rep = StructureAnalyzer.analyze(model, info, aopts);
+                        cur = salvaged.result();
+                        q = QualityVector.of(rep, cur);
+                        adopt(job, build, st, salvaged);
+                        snapshot(job, tr, "critic" + round, "Critic round " + round,
+                                clip(what.replace("DIAGNOSIS:", "").strip(), 300) + " (частично)", model, q);
+                        verdict(job, "critic" + round, "Critic round " + round, true,
+                                "частично применено", q, null);
+                        continue;
+                    }
+                }
                 rejected.add(clip(what, 200) + " — rejected: " + gate);
                 tr.note("critic" + round + " rejected", gate + "\n" + what);
                 verdict(job, "critic" + round, "Critic round " + round, false, gate, nq, null);
@@ -1558,13 +1636,90 @@ public final class BuildPipeline {
         }
         liveModel(job, build, next, "critic");
         liveParts(job, r.result());
+        int beforeCrit = rep.count(dev.aibuild.analysis.Severity.CRITICAL);
+        int beforeMajor = rep.count(dev.aibuild.analysis.Severity.MAJOR);
+        // the change added analyzer defects: repair instead of shipping a draft. A live edit ("more foliage
+        // on the sakura") left 13 floating blossom blocks and the build was simply marked ЧЕРНОВИК, although
+        // the mechanical finisher settles exactly that and one critic round can fix the rest.
+        boolean added = nrep.count(dev.aibuild.analysis.Severity.CRITICAL) > beforeCrit
+                || nrep.count(dev.aibuild.analysis.Severity.MAJOR) > beforeMajor;
+        if (added) {
+            say(job, "<gray>Правка внесла дефекты — чиню (доводка + до <v0> кругов критика)…</gray>",
+                    Math.max(1, job.mode.editVerifyRounds));
+            QualityVector q0 = QualityVector.of(rep, base);
+            // mechanical repairs first: loose foliage settles, attachments find walls, rooms get light
+            Revision fr = finish(job, tr, runtime, budget, limits, job.script, r.result(), aopts, q0);
+            if (fr != null) {
+                job.script = fr.source();
+                next = fr.result().model();
+                nrep = StructureAnalyzer.analyze(next, info, aopts);
+                r = fr;
+                job.scriptParts = fr.result().partTable(30);
+                liveModel(job, build, next, "critic");
+            }
+            // then the critic for what code cannot fix
+            int rounds = Math.max(1, job.mode.editVerifyRounds);
+            String request = original + ". Изменение: " + change;
+            boolean repairEyes = eyes;
+            String repairSystem = ScriptPrompts.system(job.stdlib, c.includeBlockList ? blockList.get() : null);
+            for (int round = 1; round <= rounds
+                    && (nrep.count(dev.aibuild.analysis.Severity.CRITICAL) > beforeCrit
+                    || nrep.count(dev.aibuild.analysis.Severity.MAJOR) > beforeMajor); round++) {
+                checkCancelled(job);
+                job.status("ИИ чинит дефекты правки: раунд " + round + " из " + rounds + "…", 0.4 + 0.2 * round / rounds);
+                stageOf(job, "repair", "Repair round " + round);
+                byte[] repairImg = repairEyes ? sheet(next) : null;
+                String evidence = withAutoNotes(job, nrep.toText()) + "\nQuality now: "
+                        + QualityVector.of(nrep, r.result()).describe() + "\n"
+                        + (r.result().collisionText().isEmpty() ? "" : "Collisions between parts:\n" + r.result().collisionText());
+                String repairUser = ScriptPrompts.critic(request, job.script, evidence, job.scriptParts, repairImg != null,
+                        round, rounds, List.of());
+                List<ChatMessage> repairMsgs = new ArrayList<>(List.of(ChatMessage.system(repairSystem),
+                        repairImg == null ? ChatMessage.user(repairUser) : ChatMessage.user(repairUser, List.of(repairImg))));
+                String repairAnswer = callText(job, tr, "repair" + round, job.mode.effortReviewFollowup, repairMsgs,
+                        codeStream(job, "repair" + round), null);
+                if (isDone(repairAnswer)) break;
+                Revision rr = revise(job, tr, runtime, budget, job.scriptSeed, limits, job.script, repairAnswer, repairMsgs,
+                        "repair" + round, job.mode.effortReviewFollowup);
+                if (rr == null) continue;
+                VoxelModel rm = rr.result().model();
+                AnalysisReport rrep = StructureAnalyzer.analyze(rm, info, aopts);
+                List<String> worse = QualityVector.of(rrep, rr.result()).regressions(q0);
+                if (!worse.isEmpty()) {
+                    Revision salvaged = salvage(job, tr, runtime, budget, limits, job.script, repairAnswer, q0, aopts,
+                            "repair" + round);
+                    if (salvaged != null) {
+                        rr = salvaged;
+                        rm = rr.result().model();
+                        rrep = StructureAnalyzer.analyze(rm, info, aopts);
+                        worse = QualityVector.of(rrep, rr.result()).regressions(q0);
+                    }
+                }
+                if (!worse.isEmpty()) continue;
+                int nowCrit = rrep.count(dev.aibuild.analysis.Severity.CRITICAL);
+                int nowMajor = rrep.count(dev.aibuild.analysis.Severity.MAJOR);
+                if (nowCrit > beforeCrit || nowMajor > beforeMajor) {
+                    // better than what the edit left, and no worse than before the edit: keep it
+                    job.script = rr.source();
+                    next = rm;
+                    nrep = rrep;
+                    r = rr;
+                    job.scriptParts = rr.result().partTable(30);
+                    job.scriptModel = rm.copy();
+                    liveModel(job, build, rm, "critic");
+                    liveParts(job, rr.result());
+                    say(job, "<gray>Раунд <v0>: дефектов сейчас <white><v1></white> критичных / <white><v2></white> серьёзных.</gray>",
+                            round, nowCrit, nowMajor);
+                }
+            }
+        }
         Verdict v = new Verdict();
         v.rounds = 1;
         v.summary = clip(r.diagnosis().replace("CHANGE:", "").strip(), 300);
         v.finalReport = nrep;
-        v.approved = nrep.count(dev.aibuild.analysis.Severity.CRITICAL) <= rep.count(dev.aibuild.analysis.Severity.CRITICAL)
-                && nrep.count(dev.aibuild.analysis.Severity.MAJOR) <= rep.count(dev.aibuild.analysis.Severity.MAJOR);
-        if (!v.approved) v.blockers.put("regression", "the change added analyzer defects");
+        v.approved = nrep.count(dev.aibuild.analysis.Severity.CRITICAL) <= beforeCrit
+                && nrep.count(dev.aibuild.analysis.Severity.MAJOR) <= beforeMajor;
+        if (!v.approved) v.blockers.put("regression", "the change added analyzer defects that the repair rounds could not fix");
         v.score = -1;
         commit(job, build, next, change, v, tr);
         return true;

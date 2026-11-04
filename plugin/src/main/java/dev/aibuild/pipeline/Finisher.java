@@ -47,13 +47,7 @@ public final class Finisher {
 
     public static Result plan(VoxelModel model, BlockInfo info, List<Collision> collisions, boolean interior) {
         Finisher.Run r = new Finisher.Run(model.copy(), info);
-        r.collisions(collisions);
-        r.ladders();
-        AnalysisReport rep = r.analyze(interior);
-        r.attachments(rep);
-        r.doors(rep);
-        r.crumbs(rep);
-        if (interior) r.light();
+        runRepairs(r, collisions, interior);
         if (r.edits.isEmpty()) return new Result(null, 0, r.notes());
         StringBuilder js = new StringBuilder("part('" + PART + "', () => {\n");
         js.append("  // mechanical repairs made after review: walls restored, attachments supported, doors cleared, rooms lit\n");
@@ -61,6 +55,26 @@ public final class Finisher {
                 .append(VoxelModel.kz(k)).append(", '").append(s == null ? "air" : s.toString()).append("');\n"));
         js.append("});\n");
         return new Result(js.toString(), r.edits.size(), r.notes());
+    }
+
+    /**
+     * The same repairs as {@link #plan}, returning the repaired model itself instead of a script part — for
+     * tests and tools that want to look at the result directly.
+     */
+    public static VoxelModel repair(VoxelModel model, BlockInfo info, List<Collision> collisions, boolean interior) {
+        Finisher.Run r = new Finisher.Run(model.copy(), info);
+        runRepairs(r, collisions, interior);
+        return r.m;
+    }
+
+    private static void runRepairs(Finisher.Run r, List<Collision> collisions, boolean interior) {
+        r.collisions(collisions);
+        r.ladders();
+        AnalysisReport rep = r.analyze(interior);
+        r.attachments(rep);
+        r.doors(rep);
+        r.crumbs(rep);
+        if (interior) r.light();
     }
 
     private static final class Run {
@@ -217,7 +231,9 @@ public final class Finisher {
             }
             for (int[] p : rep.cells.getOrDefault("unsupported_wall", List.of())) {
                 BlockSpec s = at(p[0], p[1], p[2]);
-                if (s == null || s.name().equals("ladder") && (ladder(p[0], p[1] - 1, p[2]) || ladder(p[0], p[1] + 1, p[2]))) continue;
+                if (s == null) continue;
+                // A ladder rung hangs on the wall behind IT, never on the rung below: a whole flagged ladder
+                // column used to survive repair because every rung pointed at the rung under it.
                 Dir best = null;
                 for (Dir d : Dir.HORIZONTAL) if (sturdy(p[0] - d.dx, p[1], p[2] - d.dz, d)) { best = d; break; }
                 if (best != null && s.hasProp("facing")) set(p[0], p[1], p[2], s.with("facing", best.id()), "wall-mounted blocks turned to the wall that holds them");
@@ -240,9 +256,111 @@ public final class Finisher {
         }
 
         void crumbs(AnalysisReport rep) {
-            for (int[] p : rep.cells.getOrDefault("floating_small", List.of())) {
+            // a fresh pass: attachments and door clearing above can change what floats
+            AnalysisReport fresh = analyze(false);
+            settleFoliage(fresh);
+            // settling moves and removes clusters, which can expose new floaters (a leaf that hung on a
+            // cluster that just settled away); re-check before sweeping the crumbs
+            AnalysisReport after = analyze(false);
+            for (int[] p : after.cells.getOrDefault("floating_small", List.of())) {
                 if (at(p[0], p[1], p[2]) != null) set(p[0], p[1], p[2], null, "floating crumbs removed");
             }
+        }
+
+        /**
+         * Drops loose organic material (blossom clusters, petals, plant tops) that floats disconnected onto
+         * the first solid thing under it. In Minecraft such leaves decay and vanish, so a canopy edit that
+         * leaves a cluster hanging turns into a hole a day later; settling keeps the visual mass. Only
+         * organic material is settled — floating stone, glass or furniture is a design error the critic sees.
+         */
+        void settleFoliage(AnalysisReport rep) {
+            List<int[]> cells = rep.cells.getOrDefault("floating_all", List.of());
+            if (cells.isEmpty()) return;
+            // group the flagged cells into components of face/edge-touching neighbours
+            java.util.Map<Long, List<int[]>> byComp = new java.util.LinkedHashMap<>();
+            java.util.Map<Long, Integer> compOf = new java.util.HashMap<>();
+            int comp = 0;
+            for (int[] p : cells) {
+                java.util.Deque<int[]> queue = new java.util.ArrayDeque<>();
+                Long key = VoxelModel.key(p[0], p[1], p[2]);
+                if (compOf.containsKey(key)) continue;
+                comp++;
+                queue.add(p);
+                compOf.put(key, comp);
+                List<int[]> members = new ArrayList<>();
+                while (!queue.isEmpty()) {
+                    int[] c = queue.poll();
+                    members.add(c);
+                    for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++) {
+                        if (dx == 0 && dy == 0 && dz == 0) continue;
+                        Long nk = VoxelModel.key(c[0] + dx, c[1] + dy, c[2] + dz);
+                        if (compOf.containsKey(nk)) continue;
+                        if (containsCell(cells, nk)) {
+                            compOf.put(nk, comp);
+                            queue.add(new int[]{c[0] + dx, c[1] + dy, c[2] + dz});
+                        }
+                    }
+                }
+                byComp.put((long) comp, members);
+            }
+            for (List<int[]> members : byComp.values()) {
+                if (members.size() > 64) continue;                       // a real structure, not loose foliage
+                // settle what a tree or garden is made of (blossom, petals, plants, branch wood); floating
+                // stone, glass or brick is a design error the critic must see, and only crumbs of it go
+                boolean settleable = members.stream().allMatch(c -> looseOrganic(at(c[0], c[1], c[2])));
+                if (!settleable) continue;
+                // how far the cluster can fall as a whole: a cell passes through other cells of the same
+                // cluster and stops at the first thing that is neither air nor part of the cluster
+                java.util.Set<Long> member = new java.util.HashSet<>();
+                for (int[] c : members) member.add(VoxelModel.key(c[0], c[1], c[2]));
+                int drop = Integer.MAX_VALUE;
+                for (int[] c : members) {
+                    int reach = 0;
+                    while (c[1] - reach - 1 >= 0) {
+                        long below = VoxelModel.key(c[0], c[1] - reach - 1, c[2]);
+                        if (member.contains(below)) {
+                            reach++;
+                            continue;
+                        }
+                        if (at(c[0], c[1] - reach - 1, c[2]) != null) break;
+                        reach++;
+                    }
+                    drop = Math.min(drop, reach);
+                }
+                if (drop <= 0 || drop > 48) {
+                    for (int[] c : members) set(c[0], c[1], c[2], null, "loose foliage that could not settle removed");
+                    continue;
+                }
+                // move down: capture what each cell holds, clear, then place at the dropped position
+                List<Object[]> moves = new ArrayList<>();
+                for (int[] c : members) moves.add(new Object[]{c[0], c[1], c[2], at(c[0], c[1], c[2])});
+                for (Object[] mv : moves) set((int) mv[0], (int) mv[1], (int) mv[2], null, null);
+                for (Object[] mv : moves) {
+                    set((int) mv[0], (int) mv[1] - drop, (int) mv[2], (BlockSpec) mv[3], "loose foliage settled onto the mass below");
+                }
+            }
+        }
+
+        private boolean containsCell(List<int[]> cells, long key) {
+            int x = VoxelModel.kx(key), y = VoxelModel.ky(key), z = VoxelModel.kz(key);
+            for (int[] c : cells) if (c[0] == x && c[1] == y && c[2] == z) return true;
+            return false;
+        }
+
+        /**
+         * Loose material that settles: foliage, petals, plants and branch wood. A floating blossom cluster or
+         * a branch tip that a canopy edit left hanging (a live sakura edit produced exactly that) either
+         * lands on the mass below or, when it cannot, goes away — in Minecraft unsupported leaves decay, so
+         * leaving them means a hole a day later. Masonry, glass and furniture are not settled: those are
+         * design errors the critic sees.
+         */
+        private boolean looseOrganic(BlockSpec s) {
+            if (s == null) return false;
+            String n = s.name();
+            return n.endsWith("_leaves") || n.contains("petal") || n.contains("flower") || n.equals("moss_carpet")
+                    || n.equals("short_grass") || n.equals("fern") || n.equals("azalea") || n.equals("moss_block")
+                    || n.endsWith("_sapling") || n.contains("blossom") || n.endsWith("_bush") || n.equals("vine")
+                    || n.endsWith("_log") || n.endsWith("_wood") || n.endsWith("_planks") || n.endsWith("_fence");
         }
 
         void light() {

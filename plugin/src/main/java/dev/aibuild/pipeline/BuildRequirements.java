@@ -28,7 +28,33 @@ final class BuildRequirements {
         }
         options.maximumSize = dimensions(Json.obj(plan, "size_limits"));
         options.exactSize = dimensions(Json.obj(plan, "exact_size"));
+        // The height axis is only enforced when the request itself names a height. The model's own plan
+        // invents a height for a request like "дом 10 на 10" (it decided 17), and the built house then
+        // measured 28 to the chimney top: a defect the user never asked about. A request that does say
+        // "высотой 18" or "18 blocks tall" keeps its hard height expectation.
+        if (options.exactSize != null && options.exactSize.length > 1 && options.exactSize[1] > 0
+                && !heightAsked(Json.str(plan, "request", ""))) {
+            options.exactSize[1] = 0;
+        }
         return options;
+    }
+
+    /**
+     * Whether the request states a height (or a full three-axis size), in Russian or English: "высотой 18",
+     * "18 в высоту", "height 18", "18 blocks tall", "10 х 10 х 12". A two-axis size ("10 на 10") is a
+     * footprint and does not count.
+     */
+    static boolean heightAsked(String request) {
+        if (request == null || request.isBlank()) return false;
+        String s = request.toLowerCase(Locale.ROOT);
+        if (s.matches(".*высот[аыеоюи]{0,3}\\D{0,12}\\d+.*")) return true;          // высотой 18 / высота 18
+        if (s.matches(".*\\d+\\D{0,16}в\\s*высот.*")) return true;                   // 18 в высоту
+        if (s.matches(".*\\d+\\s*[xх×]\\s*\\d+\\s*[xх×]\\s*\\d+.*")) return true;     // 10 х 10 х 12
+        if (s.matches(".*height\\D{0,12}\\d+.*")) return true;                       // height 18
+        if (s.matches(".*\\d+\\D{0,16}(high|tall)\\b.*")) return true;               // 18 blocks tall
+        if (s.matches(".*этаж\\D{0,10}\\d+.*")) return true;                          // этажей 3
+        if (s.matches(".*\\d+\\D{0,8}этаж.*")) return true;                           // 3 этажа
+        return false;
     }
 
     private static int[] dimensions(JsonObject value) {

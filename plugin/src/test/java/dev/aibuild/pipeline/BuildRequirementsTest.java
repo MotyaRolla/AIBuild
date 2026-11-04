@@ -64,7 +64,7 @@ class BuildRequirementsTest {
         assertTrue(interior.hasCode("dark_interior"));
         assertFalse(sculpture.hasCode("dark_interior"));
         JsonObject plan = JsonParser.parseString("""
-                {"type":"statue","exact_size":{"x":6},"size_limits":{"x":8}}
+                {"type":"statue","exact_size":{"x":10},"size_limits":{"x":8}}
                 """).getAsJsonObject();
         var options = BuildRequirements.analyzerOptions(plan);
         assertTrue(StructureAnalyzer.analyze(model,info,options).hasCode("overall_size_mismatch"));
