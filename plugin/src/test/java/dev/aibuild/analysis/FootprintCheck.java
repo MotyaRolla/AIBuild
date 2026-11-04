@@ -133,6 +133,33 @@ class FootprintCheck {
         assertTrue(Math.abs(fx - 10) <= 1, "the garden bed must not widen the body: footprintX=" + fx);
     }
 
+    /** Plain stone and andesite are castle wall materials, not terrain. */
+    @Test
+    void aStoneCastleWallIsStillAWall() {
+        VoxelModel m = new VoxelModel();
+        for (int y = 1; y <= 5; y++) {
+            for (int x = 0; x <= 19; x++) {
+                for (int z = 0; z <= 19; z++) {
+                    if (x != 0 && x != 19 && z != 0 && z != 19) continue;
+                    m.set(x, y, z, BlockSpec.of(y == 3 ? "andesite" : "stone"));
+                }
+            }
+        }
+        // a small plank shed against the east wall: the only body left if the stone were dropped as terrain
+        for (int y = 1; y <= 3; y++) {
+            for (int x = 20; x <= 24; x++) {
+                for (int z = 8; z <= 12; z++) {
+                    if (x == 20 || x == 24 || z == 8 || z == 12) m.set(x, y, z, BlockSpec.of("oak_planks"));
+                }
+            }
+        }
+        for (int x = 0; x <= 24; x++) for (int z = 0; z <= 19; z++) m.set(x, 0, z, BlockSpec.of("stone_bricks"));
+        AnalysisReport rep = analyze(m, 20, 20);
+        int fx = (int) rep.metrics.get("footprintX");
+        int fz = (int) rep.metrics.get("footprintZ");
+        assertTrue(Math.abs(fx - 20) <= 2 && Math.abs(fz - 20) <= 2, "the stone ring is the body: " + fx + "x" + fz);
+    }
+
     @Test
     void aWrongFootprintIsStillReported() {
         // the same house checked against an ask of 20x20 must fail — the check itself stays strict

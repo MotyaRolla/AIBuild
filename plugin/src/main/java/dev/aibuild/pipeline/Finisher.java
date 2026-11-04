@@ -275,7 +275,11 @@ public final class Finisher {
          */
         void settleFoliage(AnalysisReport rep) {
             List<int[]> cells = rep.cells.getOrDefault("floating_all", List.of());
-            if (cells.isEmpty()) return;
+            // a list cut off at the cap can end in the middle of a large structure, whose listed part would
+            // then look like a small loose cluster and be moved away from the rest of it
+            if (cells.isEmpty() || cells.size() >= StructureAnalyzer.MAX_MARKED_CELLS) return;
+            Set<Long> flagged = new HashSet<>();
+            for (int[] p : cells) flagged.add(VoxelModel.key(p[0], p[1], p[2]));
             // group the flagged cells into components of face/edge-touching neighbours
             java.util.Map<Long, List<int[]>> byComp = new java.util.LinkedHashMap<>();
             java.util.Map<Long, Integer> compOf = new java.util.HashMap<>();
@@ -295,7 +299,7 @@ public final class Finisher {
                         if (dx == 0 && dy == 0 && dz == 0) continue;
                         Long nk = VoxelModel.key(c[0] + dx, c[1] + dy, c[2] + dz);
                         if (compOf.containsKey(nk)) continue;
-                        if (containsCell(cells, nk)) {
+                        if (flagged.contains(nk)) {
                             compOf.put(nk, comp);
                             queue.add(new int[]{c[0] + dx, c[1] + dy, c[2] + dz});
                         }
@@ -305,29 +309,45 @@ public final class Finisher {
             }
             for (List<int[]> members : byComp.values()) {
                 if (members.size() > 64) continue;                       // a real structure, not loose foliage
-                // settle what a tree or garden is made of (blossom, petals, plants, branch wood); floating
-                // stone, glass or brick is a design error the critic must see, and only crumbs of it go
-                boolean settleable = members.stream().allMatch(c -> looseOrganic(at(c[0], c[1], c[2])));
+                // settle what a tree or garden is made of: foliage, and branch wood carrying foliage. A cluster of
+                // wood alone is a beam, a balcony or a sign, and floating stone, glass or brick is a design error;
+                // the critic must see those, and only crumbs of them go
+                long foliage = members.stream().filter(c -> foliage(at(c[0], c[1], c[2]))).count();
+                boolean settleable = foliage * 2 >= members.size()
+                        && members.stream().allMatch(c -> foliage(at(c[0], c[1], c[2])) || branch(at(c[0], c[1], c[2])));
                 if (!settleable) continue;
                 // how far the cluster can fall as a whole: a cell passes through other cells of the same
                 // cluster and stops at the first thing that is neither air nor part of the cluster
                 java.util.Set<Long> member = new java.util.HashSet<>();
                 for (int[] c : members) member.add(VoxelModel.key(c[0], c[1], c[2]));
                 int drop = Integer.MAX_VALUE;
+                boolean lands = false;
                 for (int[] c : members) {
                     int reach = 0;
+                    boolean hit = false;
                     while (c[1] - reach - 1 >= 0) {
                         long below = VoxelModel.key(c[0], c[1] - reach - 1, c[2]);
                         if (member.contains(below)) {
                             reach++;
                             continue;
                         }
-                        if (at(c[0], c[1] - reach - 1, c[2]) != null) break;
+                        if (at(c[0], c[1] - reach - 1, c[2]) != null) {
+                            hit = true;
+                            break;
+                        }
                         reach++;
                     }
-                    drop = Math.min(drop, reach);
+                    // the cluster falls as far as its shortest column, and only that column decides where it lands
+                    if (reach < drop) {
+                        drop = reach;
+                        lands = hit;
+                    } else if (reach == drop) {
+                        lands |= hit;
+                    }
                 }
-                if (drop <= 0 || drop > 48) {
+                // already resting on something the analyzer does not count as support: leave it for the critic
+                if (drop <= 0) continue;
+                if (!lands || drop > 48) {
                     for (int[] c : members) set(c[0], c[1], c[2], null, "loose foliage that could not settle removed");
                     continue;
                 }
@@ -341,26 +361,28 @@ public final class Finisher {
             }
         }
 
-        private boolean containsCell(List<int[]> cells, long key) {
-            int x = VoxelModel.kx(key), y = VoxelModel.ky(key), z = VoxelModel.kz(key);
-            for (int[] c : cells) if (c[0] == x && c[1] == y && c[2] == z) return true;
-            return false;
+        /**
+         * Loose foliage: leaves, blossom, petals and plants. A floating blossom cluster that a canopy edit left
+         * hanging (a live sakura edit produced exactly that) either lands on the mass below or, when it cannot,
+         * goes away; in Minecraft unsupported leaves decay, so leaving them means a hole a day later.
+         */
+        private static boolean foliage(BlockSpec s) {
+            if (s == null) return false;
+            String n = s.name();
+            if (n.startsWith("potted_") || n.equals("flower_pot")) return false;   // furniture, not a plant
+            return n.endsWith("_leaves") || n.contains("petal") || n.contains("flower") || n.equals("moss_carpet")
+                    || n.equals("short_grass") || n.equals("fern") || n.equals("azalea") || n.equals("moss_block")
+                    || n.endsWith("_sapling") || n.contains("blossom") || n.endsWith("_bush") || n.equals("vine");
         }
 
         /**
-         * Loose material that settles: foliage, petals, plants and branch wood. A floating blossom cluster or
-         * a branch tip that a canopy edit left hanging (a live sakura edit produced exactly that) either
-         * lands on the mass below or, when it cannot, goes away — in Minecraft unsupported leaves decay, so
-         * leaving them means a hole a day later. Masonry, glass and furniture are not settled: those are
-         * design errors the critic sees.
+         * Branch wood, which settles only together with the foliage it carries. Planks and fences are never
+         * branches: a floating cluster of them is a balcony, a bridge or a sign the critic must see.
          */
-        private boolean looseOrganic(BlockSpec s) {
+        private static boolean branch(BlockSpec s) {
             if (s == null) return false;
             String n = s.name();
-            return n.endsWith("_leaves") || n.contains("petal") || n.contains("flower") || n.equals("moss_carpet")
-                    || n.equals("short_grass") || n.equals("fern") || n.equals("azalea") || n.equals("moss_block")
-                    || n.endsWith("_sapling") || n.contains("blossom") || n.endsWith("_bush") || n.equals("vine")
-                    || n.endsWith("_log") || n.endsWith("_wood") || n.endsWith("_planks") || n.endsWith("_fence");
+            return n.endsWith("_log") || n.endsWith("_wood");
         }
 
         void light() {

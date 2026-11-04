@@ -48,7 +48,7 @@ public final class PlayerPresenceListener implements Listener {
         var running = plugin.pipeline().jobs();
         for (var job : running) {
             if (job.finished) continue;
-            if (job.owner != null && !job.owner.equals(player.getUniqueId())) continue;
+            if (!player.getUniqueId().equals(job.owner)) continue;   // console builds have no owner to tell
             Msg.send(player, "<gray>Постройка <white><v0></white> всё ещё идёт — прогресс показывается в боссбаре. "
                     + "Отменить: </gray><white>/aib cancel <v0></white>", job.buildId);
         }
@@ -66,7 +66,7 @@ public final class PlayerPresenceListener implements Listener {
         var player = event.getPlayer();
         for (var job : plugin.pipeline().jobs()) {
             if (job.finished) continue;
-            if (job.owner != null && !job.owner.equals(player.getUniqueId())) continue;
+            if (!player.getUniqueId().equals(job.owner)) continue;   // console builds have no owner to tell
             plugin.getLogger().info("player " + player.getName() + " left with build " + job.buildId
                     + " still running; progress lines will be queued for them");
         }

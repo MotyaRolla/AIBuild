@@ -73,6 +73,31 @@ class FinisherCheck {
     }
 
     @Test
+    void aFloatingWoodenBalconyIsNotDroppedToTheGround() {
+        VoxelModel m = new VoxelModel();
+        m.set(0, 0, 0, BlockSpec.of("stone_bricks"));
+        // planks and a fence rail: a balcony, a bridge or a sign, never foliage
+        for (int x = 0; x <= 2; x++) {
+            m.set(x, 6, 0, BlockSpec.of("oak_planks"));
+            m.set(x, 7, 0, BlockSpec.of("oak_fence"));
+        }
+        AnalysisReport rep = StructureAnalyzer.analyze(repaired(m), info, new AnalyzerOptions(false));
+        assertEquals(6, rep.metrics.get("floatingBlocks"), "a wooden structure is the critic's to fix, not moved or deleted");
+    }
+
+    @Test
+    void aBranchCarryingBlossomSettlesWithIt() {
+        VoxelModel m = new VoxelModel();
+        m.set(0, 0, 0, BlockSpec.of("stone_bricks"));
+        m.set(1, 0, 0, BlockSpec.of("stone_bricks"));
+        m.set(0, 5, 0, BlockSpec.of("cherry_log"));
+        m.set(0, 6, 0, BlockSpec.of("cherry_leaves"));
+        m.set(1, 6, 0, BlockSpec.of("cherry_leaves"));
+        AnalysisReport rep = StructureAnalyzer.analyze(repaired(m), info, new AnalyzerOptions(false));
+        assertEquals(0, rep.metrics.get("floatingBlocks"), "branch wood under blossom falls with it");
+    }
+
+    @Test
     void everyLadderRungGetsItsOwnWall() {
         VoxelModel m = new VoxelModel();
         // a ladder column facing south with air behind, and a solid wall to the west

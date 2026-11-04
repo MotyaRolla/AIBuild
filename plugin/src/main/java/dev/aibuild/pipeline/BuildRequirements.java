@@ -40,21 +40,27 @@ final class BuildRequirements {
     }
 
     /**
-     * Whether the request states a height (or a full three-axis size), in Russian or English: "высотой 18",
-     * "18 в высоту", "height 18", "18 blocks tall", "10 х 10 х 12". A two-axis size ("10 на 10") is a
+     * A stated height, in Russian or English: "высотой 18", "18 в высоту", "height 18", "18 blocks tall",
+     * "10 х 10 х 12", "3 этажа", "3-этажный". The number must sit right next to the height word; a looser
+     * match read "двухэтажный дом 10 на 10" and "50x50 with high walls" as heights, which brought back the
+     * invented-height check for exactly the requests that name only a footprint.
+     */
+    private static final java.util.regex.Pattern HEIGHT = java.util.regex.Pattern.compile(String.join("|",
+            "высот\\p{L}*\\s*(?:в|около|примерно|~)?\\s*\\d+",
+            "\\d+\\s*(?:блок\\p{L}*\\s*)?в\\s*высоту",
+            "\\d+\\s*[xх×*]\\s*\\d+\\s*[xх×*]\\s*\\d+",
+            "height\\s*(?:of\\s*)?[:=]?\\s*\\d+",
+            "\\d+\\s*(?:blocks?\\s*)?(?:high|tall)\\b",
+            "\\d+\\s*-?\\s*этаж",
+            "этаж(?:ей|а|и)?\\s*[:=]?\\s*\\d+"));
+
+    /**
+     * Whether the request states a height (or a full three-axis size). A two-axis size ("10 на 10") is a
      * footprint and does not count.
      */
     static boolean heightAsked(String request) {
         if (request == null || request.isBlank()) return false;
-        String s = request.toLowerCase(Locale.ROOT);
-        if (s.matches(".*высот[аыеоюи]{0,3}\\D{0,12}\\d+.*")) return true;          // высотой 18 / высота 18
-        if (s.matches(".*\\d+\\D{0,16}в\\s*высот.*")) return true;                   // 18 в высоту
-        if (s.matches(".*\\d+\\s*[xх×]\\s*\\d+\\s*[xх×]\\s*\\d+.*")) return true;     // 10 х 10 х 12
-        if (s.matches(".*height\\D{0,12}\\d+.*")) return true;                       // height 18
-        if (s.matches(".*\\d+\\D{0,16}(high|tall)\\b.*")) return true;               // 18 blocks tall
-        if (s.matches(".*этаж\\D{0,10}\\d+.*")) return true;                          // этажей 3
-        if (s.matches(".*\\d+\\D{0,8}этаж.*")) return true;                           // 3 этажа
-        return false;
+        return HEIGHT.matcher(request.toLowerCase(Locale.ROOT)).find();
     }
 
     private static int[] dimensions(JsonObject value) {

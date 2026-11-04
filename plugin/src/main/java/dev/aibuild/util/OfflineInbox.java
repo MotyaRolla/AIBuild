@@ -145,7 +145,7 @@ public final class OfflineInbox {
     }
 
     /**
-     * Drops the buffer for one player (used when a build is cancelled and its backlog is meaningless).
+     * Drops the buffer for one player without sending it.
      *
      * @param uuid the player
      */

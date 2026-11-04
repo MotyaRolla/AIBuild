@@ -58,6 +58,9 @@ public final class StructureAnalyzer {
         return Math.max(1, Math.round(expected * 0.08f));
     }
 
+    /** Cells kept per kind in {@link AnalysisReport#cells}; a longer list is cut off at this many. */
+    public static final int MAX_MARKED_CELLS = 5000;
+
     /** Maximum number of floating components reported individually. */
     private static final int MAX_FLOATING_REPORTS = 4;
     /** Volume threshold for a connected interior pocket to count as a room. */
@@ -808,14 +811,13 @@ public final class StructureAnalyzer {
         /**
          * Natural ground, never a wall. Raised garden beds sit at wall level, are occluding, and touch the
          * house — a live build measured a 10&times;10 body as 12 wide because a podzol bed at y=1 leaned on the
-         * wall and joined its component. Masonry (stone bricks, cobblestone, terracotta, planks) stays in the
-         * wall mask; raw terrain does not.
+         * wall and joined its component. Only soil is listed: stone, andesite, granite, diorite, deepslate,
+         * tuff, calcite, snow and ice are also what castle walls, towers and igloos are built of, and leaving
+         * them out of the mask would measure such a body by whatever trim it happens to have.
          */
         private static final java.util.Set<String> NATURAL_GROUND = java.util.Set.of(
                 "grass_block", "dirt", "coarse_dirt", "rooted_dirt", "podzol", "mycelium", "moss_block",
-                "sand", "red_sand", "gravel", "clay", "mud", "stone", "granite", "diorite", "andesite",
-                "tuff", "calcite", "deepslate", "snow_block", "ice", "packed_ice", "dirt_path",
-                "farmland", "azalea");
+                "sand", "red_sand", "gravel", "clay", "mud", "dirt_path", "farmland", "azalea");
 
         /** The wall-like cells of one layer: opaque blocks, glass, doors, logs and wood — but not terrain. */
         private boolean[] layerWall(int y, int sx, int sz) {
@@ -1241,7 +1243,7 @@ public final class StructureAnalyzer {
 
         private void mark(String kind, int x, int y, int z) {
             List<int[]> l = cells.computeIfAbsent(kind, k -> new ArrayList<>());
-            if (l.size() < 5000) l.add(new int[]{x, y, z});
+            if (l.size() < MAX_MARKED_CELLS) l.add(new int[]{x, y, z});
         }
 
         /**

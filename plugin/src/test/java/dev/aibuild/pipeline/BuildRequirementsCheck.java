@@ -48,6 +48,12 @@ class BuildRequirementsCheck {
         assertTrue(BuildRequirements.heightAsked("3-этажный дом"));
         assertFalse(BuildRequirements.heightAsked("средневековый дом 10 на 10 с фахверком"));
         assertFalse(BuildRequirements.heightAsked("Огромная проработанная сакура с озером вокруг"));
+        assertTrue(BuildRequirements.heightAsked("дом 10 на 10\nвысотой 12"), "a height on its own line still counts");
+        assertTrue(BuildRequirements.heightAsked("18 блоков в высоту"));
+        // a floor count spelled as a word, or "high" describing walls, is not a block height
+        assertFalse(BuildRequirements.heightAsked("двухэтажный дом 10 на 10"));
+        assertFalse(BuildRequirements.heightAsked("castle 50x50 with high walls"));
+        assertFalse(BuildRequirements.heightAsked("Generate huge big and beatiful castle 50x50 size, fortified walls"));
         assertFalse(BuildRequirements.heightAsked(""));
         assertFalse(BuildRequirements.heightAsked(null));
     }

@@ -1293,6 +1293,23 @@ public final class BuildPipeline {
         liveParts(job, r.result());
     }
 
+    /**
+     * Adopts a repair of an edited script build. The model copy matters: the saved version is marked exact only
+     * when it equals the script's own output, so a stale copy flags a repaired version as hand-modified.
+     */
+    private void keepEdit(Job job, Build build, Revision r) {
+        job.script = r.source();
+        job.smoothed = r.result().smoothed();
+        job.scriptParts = r.result().partTable(30);
+        job.scriptModel = r.result().model().copy();
+        synchronized (job) {
+            job.doorways.clear();
+            job.doorways.addAll(r.result().doorways());
+        }
+        liveModel(job, build, r.result().model(), "critic");
+        liveParts(job, r.result());
+    }
+
     /** A kept stage's quality row and picture in the job log, and its row on the live page. */
     private void snapshot(Job job, Transcript tr, String stage, String title, String why, VoxelModel model, QualityVector q) {
         tr.quality(stage, q);
@@ -1306,10 +1323,6 @@ public final class BuildPipeline {
         if (lb != LiveBroadcast.NOOP) lb.verdict(stage, title, kept, why, q == null ? null : q.metrics(), kept ? model : null);
     }
 
-    /**
-     * The finisher's mechanical repairs, appended to the script as its last part and kept when the script still
-     * runs and nothing got worse. Null when there was nothing to repair.
-     */
     /**
      * Keeps the hunks of a rejected revision that do not regress on their own.
      *
@@ -1347,9 +1360,9 @@ public final class BuildPipeline {
             run = r;
             kept.add(i + 1);
         }
-        if (run == null || kept.isEmpty()) return null;
-        tr.note(tag + " salvaged", "kept hunks " + kept + " of " + hunks.size()
-                + (kept.size() == hunks.size() ? "" : "; dropped: " + dropped(hunks.size(), kept)));
+        // every hunk survived on its own: that is the rejected revision itself, not a part of it
+        if (run == null || kept.isEmpty() || kept.size() == hunks.size()) return null;
+        tr.note(tag + " salvaged", "kept hunks " + kept + " of " + hunks.size() + "; dropped: " + dropped(hunks.size(), kept));
         say(job, "<gray>Правка применена частично: <white><v0></white> из <white><v1></white> правок.</gray>",
                 kept.size(), hunks.size());
         return new Revision(work, run, diagnosis(answer));
@@ -1361,6 +1374,10 @@ public final class BuildPipeline {
         return sb.toString();
     }
 
+    /**
+     * The finisher's mechanical repairs, appended to the script as its last part and kept when the script still
+     * runs and nothing got worse. Null when there was nothing to repair.
+     */
     private Revision finish(Job job, Transcript tr, ScriptRuntime runtime, ScriptRuntime.Budget budget, int[] limits,
                             String source, ScriptResult cur, AnalyzerOptions aopts, QualityVector q) {
         Finisher.Result f = Finisher.plan(cur.model(), info, cur.collisions(), aopts.expectInterior);
@@ -1527,25 +1544,32 @@ public final class BuildPipeline {
                 else if (pref == 0 && !nq.fixesDefects(q)) gate = "no visible improvement according to the judge";
             }
             if (gate != null) {
-                // one hunk of the revision broke something unrelated: keep the hunks that are safe on their own
-                Revision salvaged = salvage(job, tr, runtime, budget, limits, source, answer, q, aopts, "critic" + round);
+                // one hunk of the revision broke something unrelated: keep the hunks that are safe on their own.
+                // Only a measured regression is salvaged; a judge rejection names no hunk, and salvaging it would
+                // keep every hunk and accept the very revision the judge just turned down.
+                Revision salvaged = worse.isEmpty() ? null
+                        : salvage(job, tr, runtime, budget, limits, source, answer, q, aopts, "critic" + round);
                 if (salvaged != null) {
                     VoxelModel sm = salvaged.result().model();
+                    AnalysisReport srep = StructureAnalyzer.analyze(sm, info, aopts);
+                    QualityVector sq = QualityVector.of(srep, salvaged.result());
                     boolean judgeOk = true;
                     if (eyes && c.visionJudge) {
+                        // the same bar as a whole revision: a tie is kept only when a defect went down
                         int pref = judge(job, tr, prompt, sheet(model), sheet(sm));
-                        judgeOk = pref >= 0;
+                        judgeOk = pref > 0 || (pref == 0 && sq.fixesDefects(q));
                         if (!judgeOk) {
-                            tr.note("critic" + round + " salvaged rejected", "the judge preferred the previous build");
+                            tr.note("critic" + round + " salvaged rejected", pref < 0
+                                    ? "the judge preferred the previous build" : "no visible improvement according to the judge");
                         }
                     }
                     if (judgeOk) {
                         accepted++;
                         source = salvaged.source();
                         model = sm;
-                        rep = StructureAnalyzer.analyze(model, info, aopts);
+                        rep = srep;
                         cur = salvaged.result();
-                        q = QualityVector.of(rep, cur);
+                        q = sq;
                         adopt(job, build, st, salvaged);
                         snapshot(job, tr, "critic" + round, "Critic round " + round,
                                 clip(what.replace("DIAGNOSIS:", "").strip(), 300) + " (частично)", model, q);
@@ -1646,16 +1670,18 @@ public final class BuildPipeline {
         if (added) {
             say(job, "<gray>Правка внесла дефекты — чиню (доводка + до <v0> кругов критика)…</gray>",
                     Math.max(1, job.mode.editVerifyRounds));
-            QualityVector q0 = QualityVector.of(rep, base);
+            // Repairs are measured against what the edit left, not against the build before it: the change the
+            // player asked for may legitimately remove rooms or blocks, and a pre-edit baseline would then
+            // reject every repair. Each kept repair becomes the new baseline.
+            QualityVector qNow = QualityVector.of(nrep, r.result());
             // mechanical repairs first: loose foliage settles, attachments find walls, rooms get light
-            Revision fr = finish(job, tr, runtime, budget, limits, job.script, r.result(), aopts, q0);
+            Revision fr = finish(job, tr, runtime, budget, limits, job.script, r.result(), aopts, qNow);
             if (fr != null) {
-                job.script = fr.source();
                 next = fr.result().model();
                 nrep = StructureAnalyzer.analyze(next, info, aopts);
                 r = fr;
-                job.scriptParts = fr.result().partTable(30);
-                liveModel(job, build, next, "critic");
+                qNow = QualityVector.of(nrep, r.result());
+                keepEdit(job, build, fr);
             }
             // then the critic for what code cannot fix
             int rounds = Math.max(1, job.mode.editVerifyRounds);
@@ -1684,30 +1710,29 @@ public final class BuildPipeline {
                 if (rr == null) continue;
                 VoxelModel rm = rr.result().model();
                 AnalysisReport rrep = StructureAnalyzer.analyze(rm, info, aopts);
-                List<String> worse = QualityVector.of(rrep, rr.result()).regressions(q0);
+                List<String> worse = QualityVector.of(rrep, rr.result()).regressions(qNow);
                 if (!worse.isEmpty()) {
-                    Revision salvaged = salvage(job, tr, runtime, budget, limits, job.script, repairAnswer, q0, aopts,
+                    Revision salvaged = salvage(job, tr, runtime, budget, limits, job.script, repairAnswer, qNow, aopts,
                             "repair" + round);
                     if (salvaged != null) {
                         rr = salvaged;
                         rm = rr.result().model();
                         rrep = StructureAnalyzer.analyze(rm, info, aopts);
-                        worse = QualityVector.of(rrep, rr.result()).regressions(q0);
+                        worse = QualityVector.of(rrep, rr.result()).regressions(qNow);
                     }
                 }
                 if (!worse.isEmpty()) continue;
+                int curCrit = nrep.count(dev.aibuild.analysis.Severity.CRITICAL);
+                int curMajor = nrep.count(dev.aibuild.analysis.Severity.MAJOR);
                 int nowCrit = rrep.count(dev.aibuild.analysis.Severity.CRITICAL);
                 int nowMajor = rrep.count(dev.aibuild.analysis.Severity.MAJOR);
-                if (nowCrit > beforeCrit || nowMajor > beforeMajor) {
-                    // better than what the edit left, and no worse than before the edit: keep it
-                    job.script = rr.source();
+                // kept only when it leaves fewer blocking defects than the current version
+                if (nowCrit < curCrit || (nowCrit == curCrit && nowMajor < curMajor)) {
                     next = rm;
                     nrep = rrep;
                     r = rr;
-                    job.scriptParts = rr.result().partTable(30);
-                    job.scriptModel = rm.copy();
-                    liveModel(job, build, rm, "critic");
-                    liveParts(job, rr.result());
+                    qNow = QualityVector.of(nrep, r.result());
+                    keepEdit(job, build, rr);
                     say(job, "<gray>Раунд <v0>: дефектов сейчас <white><v1></white> критичных / <white><v2></white> серьёзных.</gray>",
                             round, nowCrit, nowMajor);
                 }
