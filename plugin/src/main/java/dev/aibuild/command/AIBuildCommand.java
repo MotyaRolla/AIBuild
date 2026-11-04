@@ -36,7 +36,8 @@ import java.util.stream.Collectors;
 /** /aib … command tree (Paper BasicCommand). */
 public final class AIBuildCommand implements BasicCommand {
     private static final List<String> SUBS = List.of("create", "edit", "chat", "undo", "redo", "list", "select", "info",
-            "tp", "remove", "cancel", "render", "fix", "wand", "pos1", "pos2", "import", "mode", "bench", "status", "reload", "help");
+            "tp", "remove", "cancel", "render", "fix", "wand", "pos1", "pos2", "import", "mode", "bench", "status", "reload",
+            "watch", "live", "help");
     private final AIBuildPlugin plugin;
 
     public AIBuildCommand(AIBuildPlugin plugin) {
@@ -79,6 +80,7 @@ public final class AIBuildCommand implements BasicCommand {
                 case "mode", "modes", "режим" -> mode(s, rest);
                 case "bench", "benchmark" -> bench(s, rest);
                 case "status" -> status(s);
+                case "watch", "live", "смотреть" -> watch(s, rest);
                 case "reload" -> reload(s);
                 default -> help(s);
             }
@@ -609,6 +611,64 @@ public final class AIBuildCommand implements BasicCommand {
         }
     }
 
+    /**
+     * {@code /aib watch [id]} — the one-time live link of a running build.
+     *
+     * <p>Without an id it uses the sender's active build. The link is only handed to the owner and to operators:
+     * it is an unauthenticated URL, so whoever holds it sees the plot and the AI's program.</p>
+     */
+    private void watch(CommandSender s, String[] args) {
+        Job job;
+        if (args.length > 0) {
+            Build b = plugin.store().get(args[0]);
+            job = b == null ? null : plugin.pipeline().jobFor(b.id);
+        } else if (s instanceof Player p) {
+            String active = plugin.store().getActive(p.getUniqueId());
+            job = active == null ? null : plugin.pipeline().jobFor(active);
+            if (job == null) {
+                job = firstOwned(p.getUniqueId());
+            }
+        } else {
+            job = plugin.pipeline().jobs().stream().findFirst().orElse(null);
+        }
+        if (job == null) {
+            Msg.send(s, "<yellow>Нет запущенной задачи ИИ." + (plugin.pipeline().liveStatus() == null ? " Живой просмотр выключен в конфиге.</yellow>" : "</yellow>"));
+            return;
+        }
+        dev.aibuild.live.LiveSession session = job.live != null ? job.live : plugin.pipeline().liveFor(job.buildId);
+        if (session == null) {
+            Msg.send(s, "<yellow>У задачи <white><v0></white> нет живой ссылки (просмотр выключен или задача тихая).</yellow>", job.buildId);
+            return;
+        }
+        if (s instanceof Player p && job.owner != null && !job.owner.equals(p.getUniqueId()) && !s.hasPermission("aibuild.admin")) {
+            throw new IllegalStateException("Это чужая постройка.");
+        }
+        String base = plugin.liveServer() == null ? null : plugin.liveServer().publicBaseUrl();
+        if (base == null) {
+            Msg.send(s, "<yellow>Сервер живого просмотра не запущен.</yellow>");
+            return;
+        }
+        String url = base + "/live/" + session.token() + "/";
+        // The URL goes in as a click event, not into the template: a placeholder inside a MiniMessage tag
+        // argument is not substituted, and the player would see <click:open_url:'<v0>'> instead of a link.
+        s.sendMessage(Msg.link("<gray>Смотреть: </gray>", url)
+                .append(Msg.mm("<gray> (ссылка только для этой постройки)</gray>")));
+        Msg.raw(s, "<gray>Состояние: <white><v0></v0></white>. Ссылка действует, пока идёт постройка, и ещё <v1> мин после.</gray>",
+                session.finished() ? "завершено" : "выполняется", plugin.cfg().liveExpireMinutes);
+        if (plugin.cfg().livePublicUrl == null || plugin.cfg().livePublicUrl.isBlank()) {
+            Msg.raw(s, "<yellow>Публичный адрес не задан (generation.live-view.public-url), поэтому по ссылке можно зайти только с сервера.</yellow>");
+        }
+    }
+
+    /** A running job of this player, prefer the newest. */
+    private Job firstOwned(UUID owner) {
+        Job best = null;
+        for (Job j : plugin.pipeline().jobs()) {
+            if (owner.equals(j.owner) && (best == null || j.startedAt > best.startedAt)) best = j;
+        }
+        return best;
+    }
+
     private void reload(CommandSender s) {
         if (!s.hasPermission("aibuild.admin")) throw new IllegalStateException("Нет прав.");
         plugin.reloadAll();
@@ -627,6 +687,7 @@ public final class AIBuildCommand implements BasicCommand {
                 {"/aib render", "PNG-рендер постройки"},
                 {"/aib fix", "автоисправление ориентации ступенек и полублоков (без ИИ)"},
                 {"/aib wand | pos1 | pos2 | import <имя>", "взять существующую постройку под ИИ-редактирование"},
+                {"/aib watch [id]", "ссылка на живой просмотр постройки в браузере (одна на запуск)"},
                 {"/aib remove | cancel | status", "удалить / отменить задачу / статус"}};
         for (String[] l : lines) Msg.raw(s, "<aqua><v0></aqua> <dark_gray>—</dark_gray> <gray><v1></gray>", l[0], l[1]);
     }

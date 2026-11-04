@@ -456,6 +456,7 @@ public class CommandCodeGenerateClient extends AbstractStreamingClient {
             }
             if (r != null && !r.isEmpty()) {
                 reasoning.append(r);
+                progress.reasoning(reasoning);
             }
         }
 

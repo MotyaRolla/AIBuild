@@ -12,9 +12,17 @@ around(n, cx, cz, (i) => {...}, startDeg)    n copies rotated around the vertica
 rng() rand(a,b) randInt(a,b) pick(arr) chance(p) noise(x,y,z,scale) lerp clamp range(a,b,step) log(...)
 
 ## Blocks
-block(x,y,z,m)   box(x1,y1,z1,x2,y2,z2,m,{hollow|walls|outline})   clear(x1,y1,z1,x2,y2,z2)
+block(x,y,z,m)   box(x1,y1,z1,x2,y2,z2,m,{hollow|walls|outline})   clear(x1,y1,z1,x2,y2,z2 | x,y,z)
 line([x,y,z],[x,y,z],m,r)   (r>0 = round beam; logs auto-orient)   get(x,y,z) -> 'block[state]' | null
 op({op:'roof'|'staircase'|'trim'|..., ...})   legacy JSON operation (same fields as the classic op list)
+
+## Queries: read what is built instead of guessing coordinates (world coordinates, what is placed so far)
+rooms() -> [{x1,z1,x2,z2, y, area, furniture, light}]   enclosed rooms a door/stair/ladder reaches, largest first;
+    y = the layer you stand in, x1..z2 = free floor inside the walls. Call it after the shells are built.
+partBox(name) -> [x1,y1,z1,x2,y2,z2] | null   isAir(x,y,z)   isSolid(x,y,z)   surface(x,z) -> top solid y
+onWall(x,y,z, face, m)   puts a wall-mounted block (banner, torch, sign) on the real wall face near the cell, facing
+    face; never replaces a block; returns the cell or null.   hangFrom(x,y,z, m, chain)   hangs a light under the
+    real ceiling above.
 
 ## Shapes (signed-distance solids; place them with place())
 sphere(c,r)  ellipsoid(c,[rx,ry,rz])  cuboid(a,b)  rbox(a,b,round)  cyl(a,b,r)  cone(a,b,r0,r1)
@@ -56,7 +64,7 @@ volume(x1,z1,x2,z2, y, {palette, floors, floorH, every, plinth, jetty, door:{fac
     COMPOSE 2-4 volumes of different size/height/roof (main + wing + tower + porch); never one plain box.
 tower(cx,y,cz, r, h, {palette, square, roof:{...}|false, windows, m})   castle tower: flared plinth, graded weathered
     masonry, slits and windows, corbelled parapet, merlons (open top) or cone/pyramid roof
-curtainWall([[x,z],...], y, h, {palette, t, outside:'right', walk, m})   wall with plinth skirt, buttresses, walkway, merlons
+curtainWall([[x,z],...], y, h, {palette, t, outside:'right', walk: true|block, m})   wall with plinth skirt, buttresses, walkway, merlons
 roof(x1,z1,x2,z2, y, {type:'gable'|'hip'|'pyramid'|'mansard'|'shed'|'flat'|'dome'|'cone'|'spire'|'onion', m, alt, altShare,
     tones:[bottom..top], trim, ridgeM, fill, overhang, gableOverhang, pitch:1|2, ridge:'x'|'z', eaves, height})
     x1..z2 = wall-top rectangle, y = layer above the wall top. Overhang, eave lip, rake trim, ridge cap and gable
@@ -70,15 +78,17 @@ timber(x1,y1,z1,x2,y2,z2, {m, every, braces})   half-timber frame on a wall plan
 
 ## Interior kit (furnish rooms like a builder, never leave an empty shell)
 furnish(x1,z1,x2,z2, y, type, {wood, stone, rug, border, banner, extra:[pieces], skip:[pieces], replace, lights})
+furnish(room, type, opts)   the same for a room from rooms():  rooms().forEach(r => furnish(r, 'bedroom'))
     ONE CALL FURNISHES A ROOM: x1..z2 = the air cells inside its walls, y = its floor layer (furniture stands at y+1).
+    Furniture only goes into air: walls, stairs and other parts' blocks are never replaced.
     type: bedroom | kitchen | dining | living | hall | tavern | library | study | workshop | smithy | storage | shop |
     chapel | throne. Reads the walls first: doorways, stairs and ladders stay clear, tall pieces avoid windows. Wall
     pieces (bed+nightstand, double bed, wardrobe, bookcase, counter, fireplace with mantel, desk+chair, armchair, sideboard,
     kegs, workbench, altar, throne, pillar, banner, barrels, chest, plant) go along the walls, far wall first; a
     centrepiece (table with chairs and rug, long dining table, tavern tables, pews and aisle, stalls, crates) in the
-    middle; chandeliers hang from the ceiling. replace:true first removes what an earlier furnish() put there (e.g. the
-    default rooms of volume()). Returns {pieces}.
-chandelier(x, top, z, {drop, r, m})   bed(x,y,z, facing, color)  table(x,y,z,{w,d,m})  chair(x,y,z, facing, m)
+    middle; chandeliers hang from the ceiling. replace:true first removes what an earlier furnish() put there and is
+    still there (e.g. the default rooms of volume()); a stair built over it stays. Returns {pieces}.
+chandelier(x, top, z, {drop, r, m})   banner(x,y,z, face, color) (snaps to the wall, like onWall)   bed(x,y,z, facing, color)  table(x,y,z,{w,d,m})  chair(x,y,z, facing, m)
 shelves(x1,y,z1,x2,z2,h)  fireplace(x,y,z, face, {m})  lamp(x,y,z, {hanging, chain})  rug(x1,z1,x2,z2, y, color, border)
 kitchen(x,y,z, dir, n, face)   personal touches by hand: flower_pot / potted_*, candle[candles=3,lit=true],
     decorated_pot, lectern, brewing_stand, cauldron, anvil, chiseled_bookshelf, barrel, hay_block, *_wall_banner

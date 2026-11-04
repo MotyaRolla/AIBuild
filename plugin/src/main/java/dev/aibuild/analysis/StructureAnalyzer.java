@@ -235,13 +235,15 @@ public final class StructureAnalyzer {
             if (top.size() > AnalysisReport.TOP_BLOCK_LIMIT) {
                 top = new ArrayList<>(top.subList(0, AnalysisReport.TOP_BLOCK_LIMIT));
             }
-            return new AnalysisReport(nonAirBounds,
+            AnalysisReport report = new AnalysisReport(nonAirBounds,
                     nonAirBounds[3] - nonAirBounds[0] + 1,
                     nonAirBounds[4] - nonAirBounds[1] + 1,
                     nonAirBounds[5] - nonAirBounds[2] + 1,
                     nonAir, nameCounts.size(), stateCounts.size(), top,
                     interiorVolume, rooms, darkSpots, doors, windows, lightSources,
                     metrics, issues, roomList);
+            report.cells = Map.copyOf(cells);
+            return report;
         }
 
         // ---------------------------------------------------------------------------------------------- (b) floating
@@ -266,14 +268,15 @@ public final class StructureAnalyzer {
             }
             // Nothing seeded means nothing rests on the ground: every component is floating, which the
             // component pass below reports anyway.
-            // BFS through present cells (6-neighbourhood)
+            // BFS through present cells sharing a face or an edge: a stepped roof ring or a corbel sits diagonally on the course
+            // below; a block held by one corner alone still floats
             while (!queue.isEmpty()) {
                 int c = queue.poll();
                 int y = g.yOf(c);
                 int z = g.zOf(c);
                 int x = g.xOf(c);
-                for (int d = 0; d < 6; d++) {
-                    int nx = x + DX[d], ny = y + DY[d], nz = z + DZ[d];
+                for (int d = 0; d < 18; d++) {
+                    int nx = x + NX[d], ny = y + NY[d], nz = z + NZ[d];
                     if (!g.contains(nx, ny, nz)) continue;
                     int j = g.index(nx, ny, nz);
                     if (present[j] == 0 || seen[j] != 0) continue;
@@ -294,8 +297,8 @@ public final class StructureAnalyzer {
                     int c = queue.poll();
                     comp.add(c, g);
                     int y = g.yOf(c), z = g.zOf(c), x = g.xOf(c);
-                    for (int d = 0; d < 6; d++) {
-                        int nx = x + DX[d], ny = y + DY[d], nz = z + DZ[d];
+                    for (int d = 0; d < 18; d++) {
+                        int nx = x + NX[d], ny = y + NY[d], nz = z + NZ[d];
                         if (!g.contains(nx, ny, nz)) continue;
                         int j = g.index(nx, ny, nz);
                         if (present[j] == 0 || compSeen[j] != 0) continue;
@@ -305,6 +308,7 @@ public final class StructureAnalyzer {
                 }
                 comps.add(comp);
                 floatingTotal += comp.count;
+                if (comp.count <= 3) for (int[] p : comp.samples) mark("floating_small", p[0], p[1], p[2]);
             }
 
             metrics.put("floatingBlocks", floatingTotal);
@@ -392,6 +396,7 @@ public final class StructureAnalyzer {
                         if (!ok) {
                             wallCount++;
                             addSample(wallBad, x, y, z);
+                            mark("unsupported_wall", x, y, z);
                         }
                     }
                     case FLOOR -> {
@@ -401,12 +406,14 @@ public final class StructureAnalyzer {
                         if (!supported) {
                             floorCount++;
                             addSample(floorBad, x, y, z);
+                            mark("unsupported_floor", x, y, z);
                         }
                     }
                     case CEILING -> {
                         if (!effNonAir(x, y + 1, z)) {
                             ceilCount++;
                             addSample(ceilBad, x, y, z);
+                            mark("unsupported_ceiling", x, y, z);
                         }
                     }
                     default -> { }
@@ -887,6 +894,7 @@ public final class StructureAnalyzer {
                         || present[i] != 0 && Names.isCarpet(g.at(i)) && g.contains(x, y + 1, z) && interiorMask[g.index(x, y + 1, z)] != 0;
                 if (cell && openAt(x, y + 1, z) && floorSolidAt(x, y - 1, z)) floor[i] = 1;
             }
+            byte[] doorway = new byte[n];
             // doorways split rooms: a one-cell gap between wall blocks two high with a lintel above (a gap between
             // furniture has open air above it)
             for (int i = 0; i < n; i++) {
@@ -895,7 +903,10 @@ public final class StructureAnalyzer {
                 if (!presentAt(x, y + 2, z)) continue;
                 boolean ew = presentAt(x - 1, y, z) && presentAt(x + 1, y, z) && presentAt(x - 1, y + 1, z) && presentAt(x + 1, y + 1, z);
                 boolean ns = presentAt(x, y, z - 1) && presentAt(x, y, z + 1) && presentAt(x, y + 1, z - 1) && presentAt(x, y + 1, z + 1);
-                if (ew != ns) floor[i] = 0;
+                if (ew != ns) {
+                    floor[i] = 0;
+                    doorway[i] = 1;
+                }
             }
             byte[] seen = new byte[n];
             IntQueue q = new IntQueue(1 << 10);
@@ -903,12 +914,18 @@ public final class StructureAnalyzer {
                 if (floor[i] == 0 || seen[i] != 0) continue;
                 int y = g.yOf(i);
                 int x1 = Integer.MAX_VALUE, z1 = Integer.MAX_VALUE, x2 = Integer.MIN_VALUE, z2 = Integer.MIN_VALUE, area = 0, minLight = 15, core = 0;
+                boolean access = false;
+                int dark = 0;
+                List<int[]> region = new ArrayList<>();
                 seen[i] = 1;
                 q.add(i);
                 while (!q.isEmpty()) {
                     int c = q.poll();
                     int cx = g.xOf(c), cz = g.zOf(c);
                     area++;
+                    region.add(new int[]{cx, y, cz});
+                    if (light != null && light[c] == 0) dark++;
+                    if (!access) access = reachable(cx, y, cz, doorway);
                     x1 = Math.min(x1, cx);
                     x2 = Math.max(x2, cx);
                     z1 = Math.min(z1, cz);
@@ -931,6 +948,13 @@ public final class StructureAnalyzer {
                 // a room has somewhere to stand in the open: strips (eave gaps under a roof, wall tops, the tops of
                 // furniture rows) never hold a 3 x 3 patch of floor
                 if (area < ROOM_MIN_AREA || core < 1) continue;
+                // no door, doorway, stair, ladder or opening reaches it: a roof void or a sealed cavity, not a room
+                if (!access) {
+                    sealedDark += dark;
+                    sealed++;
+                    for (int[] p : region) mark("sealed", p[0], p[1], p[2]);
+                    continue;
+                }
                 int furniture = 0;
                 for (int yy = y; yy <= y + 2; yy++) for (int zz = z1; zz <= z2; zz++) for (int xx = x1; xx <= x2; xx++) {
                     if (!g.contains(xx, yy, zz)) continue;
@@ -959,6 +983,61 @@ public final class StructureAnalyzer {
             }
             metrics.put("furnishedRooms", roomList.size() - bare);
             metrics.put("bareRooms", bare);
+            metrics.put("sealedVoids", sealed);
+            if (sealed > 0) {
+                issues.add(Issue.of(Severity.INFO, "sealed_void", sealed + " enclosed space(s) no door, stair or ladder reaches"
+                        + " (roof voids, solid cores); they are not rooms and need neither furniture nor light"));
+            }
+            if (sealedDark > 0) {
+                darkSpots = Math.max(0, darkSpots - sealedDark);
+                metrics.put("darkSpots", darkSpots);
+                for (int k = 0; k < issues.size(); k++) {
+                    Issue is = issues.get(k);
+                    if (!is.code().equals("dark_interior")) continue;
+                    if (darkSpots == 0) issues.remove(k);
+                    else issues.set(k, Issue.of(Severity.MAJOR, "dark_interior", darkSpots + " walkable interior cells in reachable rooms"
+                            + " have block light 0 (hostile mobs can spawn); add torches/lanterns", is.samples()));
+                    break;
+                }
+            }
+        }
+
+        private int sealed, sealedDark;
+
+        /** Every defect cell by kind, for tools that repair them (the report's issues carry only samples). */
+        final Map<String, List<int[]>> cells = new HashMap<>();
+
+        private void mark(String kind, int x, int y, int z) {
+            List<int[]> l = cells.computeIfAbsent(kind, k -> new ArrayList<>());
+            if (l.size() < 5000) l.add(new int[]{x, y, z});
+        }
+
+        /**
+         * Whether a floor cell is reached from elsewhere: a door, doorway, stair, ladder or trapdoor beside or under
+         * it, or open air outside the shell next to it (an arch or an open side).
+         */
+        private boolean reachable(int x, int y, int z, byte[] doorway) {
+            if (g.contains(x, y - 1, z) && present[g.index(x, y - 1, z)] != 0 && isAccess(g.at(g.index(x, y - 1, z)))) return true;
+            for (int d = 0; d < 6; d++) {
+                if (d >= 2 || d == 1) {
+                    for (int dy = 0; dy <= 1; dy++) {
+                        int nx = x + DX[d], ny = y + dy + (d == 1 ? 1 : 0), nz = z + DZ[d];
+                        if (!g.contains(nx, ny, nz)) continue;
+                        int j = g.index(nx, ny, nz);
+                        if (doorway[j] != 0) return true;
+                        if (present[j] != 0 ? isAccess(g.at(j)) : dy == 0 && d >= 2 && interiorMask[j] == 0) return true;
+                        // an opening in the floor beside it: a stairwell or a ladder shaft from the storey below
+                        if (dy == 0 && d >= 2 && present[j] == 0 && g.contains(nx, ny - 1, nz) && present[g.index(nx, ny - 1, nz)] == 0) return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        private static boolean isAccess(BlockSpec s) {
+            String nm = s.name();
+            return nm.endsWith("_door") || nm.endsWith("_stairs") || nm.equals("ladder") || nm.equals("scaffolding")
+                    || nm.endsWith("_trapdoor") || nm.equals("vine");
         }
 
         /** Share of room r's box that lies over room q's box widened by its walls (2 cells). */
@@ -1004,20 +1083,59 @@ public final class StructureAnalyzer {
                 }
             }
 
-            int walkable = 0, dark = 0, sum = 0, min = 15;
-            List<int[]> darkSamples = new ArrayList<>();
+            int walkable = 0, dark = 0, sum = 0, min = 15, pockets = 0;
+            List<int[]> darkSamples = new ArrayList<>(), pocketSamples = new ArrayList<>();
+            byte[] walk = new byte[n];
             for (int i = 0; i < n; i++) {
                 if (interiorMask[i] == 0) continue;
                 int y = g.yOf(i), z = g.zOf(i), x = g.xOf(i);
                 if (!openAt(x, y + 1, z)) continue;      // need headroom
                 if (!floorSolidAt(x, y - 1, z)) continue; // need a standable floor
+                walk[i] = 1;
+            }
+            // a pocket (an arrow-slit niche, a gap behind a stair) is walkable floor of under 4 cells joined on its level
+            byte[] pocket = new byte[n];
+            IntQueue pq = new IntQueue(64);
+            List<Integer> comp = new ArrayList<>();
+            byte[] seenW = new byte[n];
+            for (int i = 0; i < n; i++) {
+                if (walk[i] == 0 || seenW[i] != 0) continue;
+                comp.clear();
+                seenW[i] = 1;
+                pq.add(i);
+                while (!pq.isEmpty()) {
+                    int c = pq.poll();
+                    comp.add(c);
+                    int cy = g.yOf(c), cz = g.zOf(c), cx = g.xOf(c);
+                    for (int d = 2; d < 6; d++) {
+                        int nx = cx + DX[d], nz = cz + DZ[d];
+                        if (!g.contains(nx, cy, nz)) continue;
+                        int j = g.index(nx, cy, nz);
+                        if (walk[j] == 0 || seenW[j] != 0) continue;
+                        seenW[j] = 1;
+                        pq.add(j);
+                    }
+                }
+                if (comp.size() < 4) for (int c : comp) pocket[c] = 1;
+            }
+            for (int i = 0; i < n; i++) {
+                if (walk[i] == 0) continue;
+                int y = g.yOf(i), z = g.zOf(i), x = g.xOf(i);
                 walkable++;
                 sum += light[i];
                 if (light[i] < min) min = light[i];
-                if (light[i] == 0) {
+                if (light[i] == 0 && pocket[i] != 0) {
+                    pockets++;
+                    addSample(pocketSamples, x, y, z);
+                } else if (light[i] == 0) {
                     dark++;
                     addSample(darkSamples, x, y, z);
+                    mark("dark", x, y, z);
                 }
+            }
+            if (pockets > 0 && opts.expectInterior) {
+                issues.add(Issue.of(Severity.MINOR, "dark_pockets", pockets + " dark cells in niches of under 4 floor cells"
+                        + " (arrow slits, gaps behind stairs); a torch nearby would light them", pocketSamples));
             }
             darkSpots = dark;
             double avg = walkable == 0 ? 0.0 : round1((double) sum / walkable);
@@ -1077,6 +1195,7 @@ public final class StructureAnalyzer {
                         for (int dy = 0; dy <= 1; dy++) {
                             if (!passableAt(fx, y + dy, fz)) {
                                 doorBlocked = true;
+                                mark("door_blocked", fx, y + dy, fz);
                                 if (blockedSamples.size() < Issue.MAX_SAMPLES) {
                                     addSample(blockedSamples, fx, y + dy, fz);
                                 }
@@ -1115,6 +1234,7 @@ public final class StructureAnalyzer {
 
             metrics.put("doors", doors);
             metrics.put("windows", windows);
+            metrics.put("blockedDoors", blocked);
             if (blocked > 0) {
                 issues.add(Issue.of(Severity.MAJOR, "door_blocked",
                         blocked + " door" + (blocked == 1 ? "" : "s")
@@ -1473,10 +1593,30 @@ public final class StructureAnalyzer {
             }
         }
 
+        /**
+         * Size of the subject rather than the scene: the main-body footprint in x and z, and in y the cells above the
+         * ground layer inside that footprint. A castle on a landscaped plot measures the castle. Falls back to the
+         * whole model when no wall footprint is found.
+         */
+        private int[] subjectSize(int[] whole) {
+            int[] fp = wallFootprint();
+            if (fp == null) return whole;
+            int top = Integer.MIN_VALUE;
+            for (int x = fp[0]; x <= fp[1]; x++) for (int z = fp[2]; z <= fp[3]; z++) for (int y = maxY; y >= 1; y--) {
+                BlockSpec s = g.raw(x, y, z);
+                if (s != null && !s.isAir()) {
+                    top = Math.max(top, y);
+                    break;
+                }
+            }
+            return new int[]{fp[1] - fp[0] + 1, top == Integer.MIN_VALUE ? whole[1] : top, fp[3] - fp[2] + 1};
+        }
+
         private void checkOverallSize() {
             int[] actual = {nonAirBounds[3] - nonAirBounds[0] + 1,
                     nonAirBounds[4] - nonAirBounds[1] + 1, nonAirBounds[5] - nonAirBounds[2] + 1};
             String[] axes = {"x", "y", "z"};
+            int[] subject = subjectSize(actual);
             for (int i = 0; i < 3; i++) {
                 if (opts.maximumSize != null && opts.maximumSize.length > i && opts.maximumSize[i] > 0
                         && actual[i] > opts.maximumSize[i]) {
@@ -1484,9 +1624,10 @@ public final class StructureAnalyzer {
                             "overall solid " + axes[i] + " size " + actual[i] + " exceeds maximum " + opts.maximumSize[i]));
                 }
                 if (opts.exactSize != null && opts.exactSize.length > i && opts.exactSize[i] > 0
-                        && actual[i] != opts.exactSize[i]) {
+                        && Math.abs(subject[i] - opts.exactSize[i]) > (opts.exactSize[i] >= 20 ? Math.round(opts.exactSize[i] * 0.08f) : 0)) {
                     issues.add(Issue.of(Severity.MAJOR, "overall_size_mismatch",
-                            "overall solid " + axes[i] + " size " + actual[i] + " must equal " + opts.exactSize[i]));
+                            "the main body's " + axes[i] + " size is " + subject[i] + " but should be about " + opts.exactSize[i]
+                                    + " (terrain, trees and paths around it do not count)"));
                 }
             }
         }
@@ -1537,6 +1678,18 @@ public final class StructureAnalyzer {
 
         // ---------------------------------------------------------------------------------------------- helpers
 
+        /** The 18-neighbourhood (faces and edges, not lone corners), for connectivity. */
+        private static final int[] NX = new int[18], NY = new int[18], NZ = new int[18];
+        static {
+            int i = 0;
+            for (int dx = -1; dx <= 1; dx++) for (int dy = -1; dy <= 1; dy++) for (int dz = -1; dz <= 1; dz++) {
+                int k = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+                if (k == 0 || k == 3) continue;
+                NX[i] = dx;
+                NY[i] = dy;
+                NZ[i++] = dz;
+            }
+        }
         private static final int[] DX = {0, 0, 0, 0, -1, 1};
         private static final int[] DY = {-1, 1, 0, 0, 0, 0};
         private static final int[] DZ = {0, 0, -1, 1, 0, 0};

@@ -35,6 +35,18 @@ generation:
   min-score: 86              # reviewer score needed to approve
   repair-failed-ops: true    # ask the AI to fix ops that failed (bad block names etc.)
   live-preview: true         # place intermediate results so players watch the build grow
+  # One-time live link: every job gets an unguessable URL that shows the build growing in a browser, the
+  # program the AI is typing right now and the pipeline stage. The link is shown in chat, works only for
+  # that run, and is revoked expire-minutes after the build ends.
+  live-view:
+    enabled: true
+    bind: "127.0.0.1"        # loopback only: put a tunnel or reverse proxy in front to expose it
+    port: 0                  # 0 = first free port; set a fixed one if your proxy needs it
+    # Address players are given in chat (e.g. "https://builds.example.com"). Empty = the loopback URL is
+    # only logged for the operator, because it cannot be opened from another machine.
+    public-url: ""
+    max-viewers: 8           # concurrent browser event streams
+    expire-minutes: 15       # how long a finished build's link keeps working
   max-concurrent-jobs: 2
   max-extent: 160            # max size of a build along any axis (half-size around the plot centre)
   distance: 3                # gap between the player and the build front
@@ -62,18 +74,18 @@ script:
   review-deadline:
     fast: 0
     light: 0
-    standard: 780
+    standard: 1500
     extra: 0
   # after the best candidate is chosen, an art director looks at the renders and picks the parts that would gain
   # most from more work (face, entrance, roof...); that many sculptors rewrite one part each in parallel, seeing a
-  # close-up of it. The rewrite is kept only if it runs, adds no analyzer defects and the judge does not prefer
-  # the old build.
+  # close-up of it. The rewrite is kept only if it runs, makes nothing worse (floating, unsupported or dark cells,
+  # blocked doors, rooms, blocks of other parts destroyed) and the judge does not prefer the old build.
   sculptors:
     fast: 0
     light: 0
     standard: 3
     extra: 5
-  sculpt-effort: low         # reasoning of the art director and the sculptors
+  sculpt-effort: high        # reasoning of the art director, the sculptors and the interior designer
   sculpt-style: refine       # refine = keep the part's structure and kits, add craft; rewrite = redesign the part
   # before the candidates are written, a lead designer writes one short design concept per candidate (layout,
   # size, signature details, palette), so the candidates try different ideas; what the request states is kept
@@ -85,20 +97,24 @@ script:
     extra: 1
   concept-effort: high       # reasoning of the concept call when the mode's plan effort is off (else that is used)
   # an interior designer sees every room found inside the build from above and furnishes them in one extra part
-  # (runs in parallel with the sculptors, reasoning = sculpt-effort); kept only if it changes nothing outside the
-  # rooms and adds no analyzer defects (1 = on, 0 = off)
+  # (runs after the sculptors, on their result; reasoning = sculpt-effort); kept only if it changes nothing outside
+  # the rooms and makes nothing worse (1 = on, 0 = off)
   interiors:
     fast: 0
     light: 1
     standard: 1
     extra: 1
-  sculpt-timeout: 600        # seconds for all sculptors; a slower one is stopped and its part stays as it was
+  sculpt-timeout: 900        # seconds for all sculptors; a slower one is stopped and its part stays as it was
+  # after the last review step, code repairs what the analyzer points at cell by cell: decoration written into
+  # walls, removed stairs, unsupported lights and torches, furniture in doorways, floating crumbs, dark rooms.
+  # The repairs are appended to the script as part('finish'), so it still reproduces the build.
+  finisher: true
 
 vision:
   enabled: true              # send renders to the AI (checked once per session with a test image)
   judge: true                # pairwise visual judge for candidate selection and accepting critic revisions
   image-size: 1536           # width of each render sheet in pixels (3 x 2 textured views)
-  judge-effort: low          # reasoning per judge call (two calls per comparison, sides swapped)
+  judge-effort: high         # reasoning per judge call (two calls per comparison, sides swapped)
 
 # Thinking modes. Players pick one with /aib mode <id>, or per request: /aib create --mode extra ...
 # Reasoning effort per pipeline role: off | low | medium | high | xhigh | max
@@ -136,9 +152,9 @@ modes:
     eta: "время зависит от сложности"
     plan: max
     build: high
-    review: low
-    review-followup: low
-    edit: low
+    review: high
+    review-followup: high
+    edit: high
     verify-rounds: 3
     edit-verify-rounds: 1
     max-tokens: 300000
@@ -148,8 +164,8 @@ modes:
     eta: "время зависит от сложности"
     plan: max
     build: max
-    review: high
-    review-followup: low
+    review: max
+    review-followup: high
     edit: high
     verify-rounds: 3
     edit-verify-rounds: 2
@@ -171,3 +187,4 @@ placement:
 
 debug:
   save-transcripts: true     # plugins/AIBuild/logs/<build>/...
+  stage-snapshots: true      # a render and a quality.txt row of every accepted stage in that log

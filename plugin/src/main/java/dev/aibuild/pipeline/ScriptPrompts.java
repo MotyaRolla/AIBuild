@@ -232,7 +232,15 @@ public final class ScriptPrompts {
                 recognizability and proportions first, then form (flat walls, visible raw boxes, missing depth, stiff
                 silhouettes), then requested features, function (doors, access, light) and composition, then detail.
                 Problems the analyzer lists as CRITICAL or MAJOR must be fixed unless they are clearly false for
-                this kind of object. Do not churn: keep what already works.
+                this kind of object. What the analysis says is repaired automatically (lights, loose attachments,
+                decoration in walls) needs no hunk.
+                Do no harm: every revision is measured, and it is thrown away if it makes anything worse (floating
+                or unsupported blocks, dark rooms, blocked doors, fewer rooms, blocks of one part destroyed by
+                another) or if the judge does not see an improvement. So keep what already works, do not restyle
+                parts that are fine, and keep each hunk inside one part(). Do not guess where existing walls, floors
+                or rooms are: read the script, or query them in code (rooms(), partBox(name), isSolid(x, y, z),
+                surface(x, z)); place wall decoration with onWall()/banner() and hanging lights with hangFrom().
+                If nothing material is wrong, answer DONE.
 
                 Answer in this format:
                 DIAGNOSIS: up to 5 numbered findings, most important first, each naming the part and the concrete fix.
@@ -318,6 +326,9 @@ public final class ScriptPrompts {
                 Add craft on top of what is there: frames and trims, depth layers, partial blocks (stairs, slabs, walls,
                 trapdoors, fences) for micro-detail, shade() or mixes on plain surfaces, the subject's signature details,
                 lights and props where the eye goes. Keep the statement compact: loops and helpers, not long block lists.
+                Other parts' blocks are locked: a rewrite that empties or covers more than a few cells of a neighbour
+                (its wall, floor or stairs) is thrown away. partBox(name) gives a neighbour's bounds as built. Put wall
+                decoration on with onWall()/banner() and hang lights with hangFrom(), never by guessed coordinates.
                 You may use the script's top-level variables and functions.
                 Answer with ONE ```js block that contains only the complete replacement statement
                 part('%s', () => { ... }); — define any helpers inside it.
@@ -339,7 +350,9 @@ public final class ScriptPrompts {
                 %s
                 Raise the craft a lot: real depth layers, sculpted forms instead of boxes, texture and shade() on
                 surfaces, partial blocks (stairs, slabs, walls, trapdoors, fences) for micro-detail, the subject's
-                signature details. Keep what already works. You may use the script's top-level variables and functions.
+                signature details. Keep what already works. Other parts' blocks are locked: a rewrite that empties or
+                covers more than a few cells of a neighbour is thrown away (partBox(name) gives its bounds).
+                You may use the script's top-level variables and functions.
                 Answer with ONE ```js block that contains only the complete replacement statement
                 part('%s', () => { ... }); — define any helpers inside it.
 
@@ -368,11 +381,20 @@ public final class ScriptPrompts {
                 Make every room look lived-in and right for this build:
                 - Give each room a purpose from the request and its place (ground floor: kitchen, living, hall, tavern,
                   shop, smithy; upper floors: bedroom, study, library; a keep's hall: throne or hall; a temple: chapel).
-                - For each room call furnish(x1, z1, x2, z2, y - 1, type, {replace: true, wood: ...}) with its bounds;
-                  replace:true clears what volume() furnished there before. Rooms joined by a doorway are listed
-                  separately; an open-plan room may still hold two areas (see the image): furnish each with its bounds.
+                - Do not type room coordinates: read them. rooms() returns the rooms as built when your part runs
+                  ({x1, z1, x2, z2, y, area}, largest first), and furnish(room, type, {replace: true, wood: ...})
+                  furnishes one. Pick the type from where the room is, e.g.
+                    rooms().forEach(r => furnish(r, r.y <= 3 ? (r.area > 60 ? 'hall' : 'kitchen') : 'bedroom',
+                        {replace: true, wood: 'spruce'}));
+                  replace:true takes back what volume() furnished; stairs, walls and anything else stay. Furniture only
+                  goes into air, so it cannot break a wall or a staircase; cells it could not use are reported.
                 - Then add 2-5 hand-placed touches in the important rooms that tell their story (food on the table,
                   a cauldron by the hearth, an open book on a lectern, sacks and tools, flowers on sills, candles).
+                  Place them relative to a room from rooms(), and check the cell first: isAir(x, y, z).
+                - Wall decoration goes through onWall(x, y, z, face, block) or banner(x, y, z, face, colour): they find
+                  the real wall face near the cell and never replace a wall block. Hanging lights go through
+                  hangFrom(x, y, z) or chandelier(): they find the real ceiling above. A raw block() of a banner,
+                  torch or lantern at a guessed coordinate ends up inside a wall or in the air.
                 - Light every room: no corner may stay dark.
                 - Only place blocks inside the rooms: never in walls, ceilings, roofs or outside. Keep doorways, stairs
                   and ladders clear.

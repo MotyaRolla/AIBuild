@@ -261,6 +261,8 @@ abstract class AbstractStreamingClient implements LlmClient {
      * Throttled progress reporter. One instance per call; used by the reading thread only.
      */
     static final class Progress {
+        /** Reasoning text is republished at most this often (five times slower than answer progress). */
+        private static final long REASONING_INTERVAL_NANOS = 1_000_000_000L;
         private final StreamListener listener;
         private long lastNanos;
         private int lastContent = -1;
@@ -289,6 +291,29 @@ abstract class AbstractStreamingClient implements LlmClient {
             lastReasoning = reasoningChars;
             StreamListener.fire(listener, content, reasoningChars);
         }
+
+        /**
+         * The newest reasoning text, refreshed at the same slow cadence so a page can show what the model is
+         * thinking about without the transport spending a callback per token (thinking is much longer than the
+         * answer, so it gets its own, cheaper clock).
+         */
+        void reasoning(CharSequence reasoning) {
+            if (listener == null || reasoning == null) return;
+            int len = reasoning.length();
+            if (len == lastReasoningText) return;
+            long now = System.nanoTime();
+            if (now - lastReasoningNanos < REASONING_INTERVAL_NANOS) return;
+            lastReasoningNanos = now;
+            lastReasoningText = len;
+            try {
+                listener.reasoning(reasoning.toString());
+            } catch (RuntimeException ignored) {
+                // a viewer callback must never break the stream
+            }
+        }
+
+        private long lastReasoningNanos;
+        private int lastReasoningText = -1;
 
         /** Forces a final callback with the totals, if anything was produced. */
         void finish(CharSequence content, int reasoningChars) {

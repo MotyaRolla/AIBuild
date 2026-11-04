@@ -96,8 +96,59 @@ class InteriorKitTest {
             BlockSpec a = r.model().get(x, y, z), b = t.model().get(x, y, z);
             assertEquals(a == null || a.isAir() ? null : a, b == null || b.isAir() ? null : b, "upper floor changed at " + x + "," + y + "," + z);
         }
-        int outside = BuildPipeline.changesOutsideRooms(r.model(), t.model(), rep.roomList);
+        int outside = BuildPipeline.changesOutsideRooms(r.model(), t.model(), rep.roomList, info);
         assertEquals(0, outside, "refurnishing stays inside the rooms");
+    }
+
+    @Test void furnitureAgainstTheWallsMayChangeButTheShellMayNot() {
+        VoxelModel bare = run(ROOM).model();
+        VoxelModel shelf = run(ROOM + "block(1, 3, 4, 'bookshelf');").model();
+        // on the server the pane in the wall gains east=true once a shelf stands beside it
+        shelf.set(0, 3, 4, BlockSpec.of("glass_pane", java.util.Map.of("north", "true", "south", "true", "east", "true")));
+        assertNotEquals(bare.get(0, 3, 4), shelf.get(0, 3, 4));
+        assertEquals(0, BuildPipeline.changesOutsideRooms(bare, shelf, analyze(bare).roomList, info));
+        VoxelModel hole = run(ROOM + "block(0, 3, 4, 'air');").model();
+        assertEquals(1, BuildPipeline.changesOutsideRooms(bare, hole, analyze(bare).roomList, info), "removing the pane is a change");
+
+        // barrels line the whole west wall, so the room box starts one cell further in; taking them out is still inside
+        VoxelModel lined = run(ROOM + "for (let z = 1; z <= 8; z++) block(1, 2, z, 'barrel');").model();
+        List<AnalysisReport.Room> rooms = analyze(lined).roomList;
+        assertEquals(2, rooms.getFirst().x1(), analyze(lined).toText());
+        assertEquals(0, BuildPipeline.changesOutsideRooms(lined, bare, rooms, info));
+        VoxelModel breached = run(ROOM + "for (let z = 1; z <= 8; z++) block(1, 2, z, 'barrel'); block(0, 2, 2, 'air');").model();
+        assertEquals(1, BuildPipeline.changesOutsideRooms(lined, breached, rooms, info), "a hole in the wall is a change");
+    }
+
+    @Test void refurnishingKeepsAStairBuiltOverEarlierFurniture() {
+        // volume() furnishes the floors, then a later part puts a stair through the furniture; the interior
+        // designer refurnishes the hall with replace:true and must not take the stair out
+        String src = ROOM + "furnish(1, 1, 10, 8, 1, 'hall');\n"
+                + "for (let i = 0; i < 4; i++) block(9, 2 + i, 1 + i, stair('oak_planks', 'south', 'bottom'));\n"
+                + "furnish(1, 1, 10, 8, 1, 'tavern', {replace: true});\n";
+        VoxelModel m = run(src).model();
+        for (int i = 0; i < 4; i++) assertEquals("oak_stairs", m.get(9, 2 + i, 1 + i).name(), "stair step " + i);
+    }
+
+    @Test void wallDecorSnapsToTheRealWallAndLightsToTheRealCeiling() {
+        // aimed into the wall (z = 0 is the north wall) and one cell too far out: both land on the inner face
+        VoxelModel m = run(ROOM + "banner(4, 4, 0, 'south', 'red'); banner(6, 4, 2, 'south', 'blue');"
+                + "lamp(5, 3, 5, {hanging: true}); chandelier(3, 2, 6, {drop: 1});").model();
+        assertEquals("white_terracotta", m.get(4, 4, 0).name(), "the wall stays whole");
+        assertEquals("red_wall_banner", m.get(4, 4, 1).name());
+        assertEquals("blue_wall_banner", m.get(6, 4, 1).name());
+        assertEquals("lantern", m.get(5, 5, 5).name(), "the lantern hangs under the ceiling at y 6");
+        assertEquals("iron_chain", m.get(3, 5, 6).name());
+        assertEquals("lantern", m.get(3, 4, 6).name());
+        AnalysisReport rep = analyze(m);
+        assertFalse(rep.hasCode("unsupported_attachment"), rep.toText());
+    }
+
+    @Test void scriptsReadTheRoomsTheyBuilt() {
+        ScriptResult r = run(ROOM + "part('hall', () => block(1, 2, 1, 'barrel'));\n"
+                + "const rs = rooms(); log(rs.length + ' ' + rs[0].x1 + ' ' + rs[0].z2 + ' ' + rs[0].y);\n"
+                + "furnish(rs[0], 'library'); log(String(partBox('hall')));");
+        assertEquals(List.of("1 1 8 2", "1,2,1,1,2,1"), r.logs());
+        assertFalse(analyze(r.model()).hasCode("bare_room"));
     }
 
     @Test void partsAreReplacedOrAppended() {

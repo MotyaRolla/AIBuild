@@ -73,6 +73,12 @@ public final class AnalysisReport {
         }
     }
 
+    /**
+     * Every defect cell by kind (unsupported_wall/floor/ceiling, door_blocked, dark, sealed, floating_small), for
+     * repair tools; not serialized.
+     */
+    public transient Map<String, List<int[]>> cells = Map.of();
+
     /** Rooms of 12+ floor cells, largest first (empty when the build has no interior). */
     public final List<Room> roomList;
 

@@ -49,6 +49,8 @@ public final class Job {
     public volatile dev.aibuild.model.VoxelModel scriptModel;
     /** The build was positioned by the streaming preview (its ground height predates any preview blocks). */
     public volatile boolean liveAnchored;
+    /** The live-view session of this job (null when the feature is off or the job is quiet). */
+    public volatile dev.aibuild.live.LiveSession live;
 
     public Job(String buildId, UUID owner, Kind kind, String request, dev.aibuild.config.BuildMode mode) {
         this(buildId, owner, kind, request, mode, new AtomicBoolean());
@@ -78,6 +80,7 @@ public final class Job {
     public Job child(String suffix, dev.aibuild.config.BuildMode mode) {
         Job c = new Job(buildId + "/" + suffix, null, kind, request, mode, cancelled);
         c.quiet = true;
+        c.live = live;
         c.plotLimits = plotLimits == null ? null : plotLimits.clone();
         return c;
     }

@@ -84,6 +84,10 @@ public final class PluginConfig {
     public final String sculptEffort;
     /** Seconds the sculptors get together; a sculptor still working then is stopped and its part left as it was. */
     public final int sculptTimeout;
+    /** Repair mechanical defects (lights, loose attachments, blocked doors, decoration in walls) in code after review. */
+    public final boolean finisher;
+    /** Save a render and a quality row of every accepted stage in the job log. */
+    public final boolean stageSnapshots;
     /** Send renders to the model (critic, judge) when the gateway delivers images. */
     public final boolean visionEnabled;
     /** Use the pairwise vision judge to pick candidates and accept critic revisions. */
@@ -95,6 +99,19 @@ public final class PluginConfig {
     public final boolean repairFailedOps;
     public final boolean autoOrient;
     public final boolean livePreview;
+
+    /** Serve a one-time live view of every job (see {@code dev.aibuild.live}). */
+    public final boolean liveView;
+    /** Interface the live-view server listens on; loopback by default so it is never public by accident. */
+    public final String liveBindHost;
+    /** Live-view TCP port, 0 = pick a free one. */
+    public final int livePort;
+    /** Public base URL the player is given (tunnel or reverse proxy), empty = do not announce links. */
+    public final String livePublicUrl;
+    /** Concurrent browser event streams allowed. */
+    public final int liveMaxViewers;
+    /** Minutes a finished build's link keeps working before it is revoked. */
+    public final int liveExpireMinutes;
     public final int maxConcurrentJobs;
     public final int maxExtent;
     public final int distance;
@@ -163,22 +180,30 @@ public final class PluginConfig {
         scriptFallback = c.getBoolean("script.fallback-to-ops", true);
         scriptCandidates = perMode(c, "script.candidates", Map.of("fast", 1, "light", 1, "standard", 2, "extra", 3), 1, 5);
         criticRounds = perMode(c, "script.critic-rounds", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 2), 0, 6);
-        reviewDeadline = perMode(c, "script.review-deadline", Map.of("fast", 0, "light", 0, "standard", 780, "extra", 0), 0, 7200);
+        reviewDeadline = perMode(c, "script.review-deadline", Map.of("fast", 0, "light", 0, "standard", 1500, "extra", 0), 0, 7200);
         sculptors = perMode(c, "script.sculptors", Map.of("fast", 0, "light", 0, "standard", 3, "extra", 5), 0, 8);
-        sculptEffort = c.getString("script.sculpt-effort", "low");
+        sculptEffort = c.getString("script.sculpt-effort", "high");
         concepts = perMode(c, "script.concepts", Map.of("fast", 0, "light", 0, "standard", 1, "extra", 1), 0, 1);
         interiors = perMode(c, "script.interiors", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 1), 0, 1);
         conceptEffort = BuildMode.effort(c.getString("script.concept-effort", "high"));
         sculptRefine = !"rewrite".equalsIgnoreCase(c.getString("script.sculpt-style", "refine").trim());
-        sculptTimeout = Math.clamp(c.getInt("script.sculpt-timeout", 600), 30, 3600);
+        sculptTimeout = Math.clamp(c.getInt("script.sculpt-timeout", 900), 30, 3600);
+        finisher = c.getBoolean("script.finisher", true);
+        stageSnapshots = c.getBoolean("debug.stage-snapshots", true);
         visionEnabled = c.getBoolean("vision.enabled", true);
         visionJudge = c.getBoolean("vision.judge", true);
         visionImageSize = Math.clamp(c.getInt("vision.image-size", 1536), 256, 2048);
-        visionJudgeEffort = BuildMode.effort(c.getString("vision.judge-effort", "low"));
+        visionJudgeEffort = BuildMode.effort(c.getString("vision.judge-effort", "high"));
         adaptiveMaxRounds = Math.max(1, Math.min(12, c.getInt("generation.adaptive-max-rounds", 6)));
         judgeEffort = BuildMode.effort(c.getString("bench.judge-effort", "high"));
         autoOrient = c.getBoolean("generation.auto-orient", true);
         livePreview = c.getBoolean("generation.live-preview", true);
+        liveView = c.getBoolean("generation.live-view.enabled", true);
+        liveBindHost = c.getString("generation.live-view.bind", "127.0.0.1");
+        livePort = Math.clamp(c.getInt("generation.live-view.port", 0), 0, 65535);
+        livePublicUrl = c.getString("generation.live-view.public-url", "");
+        liveMaxViewers = Math.clamp(c.getInt("generation.live-view.max-viewers", 8), 1, 64);
+        liveExpireMinutes = Math.clamp(c.getInt("generation.live-view.expire-minutes", 15), 1, 1440);
         maxConcurrentJobs = Math.max(1, c.getInt("generation.max-concurrent-jobs", 2));
         maxExtent = Math.max(8, c.getInt("generation.max-extent", 160));
         distance = Math.max(0, c.getInt("generation.distance", 3));

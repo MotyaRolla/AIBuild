@@ -33,7 +33,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.lang.management.ManagementFactory;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -148,9 +150,10 @@ public final class ScriptRuntime {
         }
         error = ScriptLint.explain(error, prepared, stdlib.api());
         Canvas c = run.canvas;
+        if (error == null) c.settle();
         return new ScriptResult(c.model(), error, run.meta, c.parts(), c.owners(), c.smoothed(), List.copyOf(run.logs),
                 merge(c.warnings(), c.outside()), c.outside(), run.instructions, System.currentTimeMillis() - start,
-                List.copyOf(run.doorways));
+                List.copyOf(run.doorways), c.collisions(), Map.copyOf(c.overlaps()));
     }
 
     private static List<String> merge(List<String> warnings, long outside) {
@@ -189,7 +192,9 @@ public final class ScriptRuntime {
     // ------------------------------------------------------------------ run state
 
     private final class Run {
-        final SplittableRandom rng;
+        /** The current part's random stream; each part() call gets its own, so rewriting one part leaves the others' draws alone. */
+        SplittableRandom rng;
+        final Deque<SplittableRandom> rngStack = new ArrayDeque<>();
         final Noise noise;
         final long seed;
         final Canvas canvas;
@@ -218,6 +223,22 @@ public final class ScriptRuntime {
             this.start = start;
             this.samples = new long[]{budget.samples()};
             this.allocatedAtStart = allocated(threadId);
+        }
+
+        private List<dev.aibuild.analysis.AnalysisReport.Room> rooms;
+        private long roomsAt = -1;
+
+        /** The analyzer's rooms in what the script has built so far; recomputed only after new writes. */
+        List<dev.aibuild.analysis.AnalysisReport.Room> rooms() {
+            if (rooms == null || roomsAt != canvas.writes()) {
+                // doors and beds get their second halves when shapes resolve; without them every doorway is a hole
+                VoxelModel m = canvas.model().copy();
+                dev.aibuild.model.ShapeResolver.resolve(m, info);
+                rooms = m.isEmpty() ? List.of() : dev.aibuild.analysis.StructureAnalyzer.analyze(m, info,
+                        new dev.aibuild.analysis.AnalyzerOptions(true)).roomList;
+                roomsAt = canvas.writes();
+            }
+            return rooms;
         }
 
         void tick(int n) {
@@ -336,6 +357,36 @@ public final class ScriptRuntime {
             }
             return Undefined.instance;
         });
+        fn(scope, "__warn", 1, (c, s, a) -> {
+            run.canvas.warn(a.length == 0 ? "" : Context.toString(a[0]));
+            return Undefined.instance;
+        });
+        fn(scope, "__rooms", 0, (c, s, a) -> {
+            List<dev.aibuild.analysis.AnalysisReport.Room> rooms = run.rooms();
+            Object[] out = new Object[rooms.size()];
+            for (int i = 0; i < out.length; i++) {
+                var r = rooms.get(i);
+                Scriptable o = c.newObject(s);
+                ScriptableObject.putProperty(o, "x1", r.x1());
+                ScriptableObject.putProperty(o, "z1", r.z1());
+                ScriptableObject.putProperty(o, "x2", r.x2());
+                ScriptableObject.putProperty(o, "z2", r.z2());
+                ScriptableObject.putProperty(o, "y", r.y());
+                ScriptableObject.putProperty(o, "area", r.area());
+                ScriptableObject.putProperty(o, "furniture", r.furniture());
+                ScriptableObject.putProperty(o, "light", r.minLight());
+                out[i] = o;
+            }
+            return c.newArray(s, out);
+        });
+        fn(scope, "__solid", 3, (c, s, a) -> {
+            BlockSpec b = run.canvas.getLocal(num(a[0]), num(a[1]), num(a[2]));
+            return b != null && !b.isAir() && info.isOccluding(b);
+        });
+        fn(scope, "__partBox", 1, (c, s, a) -> {
+            int[] b = run.canvas.partBox(Context.toString(a[0]));
+            return b == null ? null : c.newArray(s, new Object[]{b[0], b[1], b[2], b[3], b[4], b[5]});
+        });
         fn(scope, "__meta", 1, (c, s, a) -> {
             JsonElement j = toJson(a[0], 0);
             if (!j.isJsonObject()) throw new IllegalArgumentException("meta() takes an object");
@@ -344,10 +395,22 @@ public final class ScriptRuntime {
         });
         fn(scope, "__part", 1, (c, s, a) -> {
             run.canvas.beginPart(Context.toString(a[0]));
+            run.rngStack.push(run.rng);
+            run.rng = new SplittableRandom(run.seed ^ run.canvas.currentPart().hashCode() * 0x9E3779B97F4A7C15L
+                    ^ run.canvas.partCall() * 0xC2B2AE3D27D4EB4FL);
+            return Undefined.instance;
+        });
+        fn(scope, "__fit", 1, (c, s, a) -> {
+            run.canvas.beginFit(Context.toString(a[0]));
+            return Undefined.instance;
+        });
+        fn(scope, "__endfit", 0, (c, s, a) -> {
+            run.canvas.endFit();
             return Undefined.instance;
         });
         fn(scope, "__endpart", 0, (c, s, a) -> {
             run.canvas.endPart();
+            if (!run.rngStack.isEmpty()) run.rng = run.rngStack.pop();
             return Undefined.instance;
         });
         fn(scope, "__push", 1, (c, s, a) -> {

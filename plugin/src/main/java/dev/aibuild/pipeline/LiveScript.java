@@ -1,6 +1,7 @@
 package dev.aibuild.pipeline;
 
 import dev.aibuild.ai.StreamListener;
+import dev.aibuild.live.LiveBroadcast;
 import dev.aibuild.script.ScriptLint;
 import dev.aibuild.script.ScriptResult;
 import dev.aibuild.script.ScriptRuntime;
@@ -32,6 +33,10 @@ final class LiveScript implements StreamListener {
     private final Consumer<String> writing;
     private final long minGapMs;
     private final AtomicBoolean busy = new AtomicBoolean();
+    /** Which program the text belongs to: the first answer, or a repair of it (shown as a separate stream). */
+    private volatile String codeKind = "program";
+    /** Set when the last streamed text was shown to the world and how much of it had been written. */
+    private volatile int lastLiveLength = -1;
     /** Held while a preview is handed to the world, so {@link #close} returns only after it. */
     private final Object showLock = new Object();
     private volatile boolean closed;
@@ -42,6 +47,17 @@ final class LiveScript implements StreamListener {
     LiveScript(ScriptRuntime runtime, long seed, int[] limits, ScriptRuntime.Budget budget, AtomicBoolean cancel,
                ExecutorService exec, Consumer<ScriptResult> show, Consumer<String> writing) {
         this(runtime, seed, limits, budget, cancel, exec, show, writing, MIN_GAP_MS);
+    }
+
+    /** Live view receiver; set by the caller when the build has a viewer, null otherwise. */
+    private volatile LiveBroadcast broadcast;
+    /** The reasoning text so far (kept so a page can show it before the answer starts). */
+    private volatile String reasoningSoFar = "";
+
+    /** Attaches the live view; every callback forwards to it before doing its own work. */
+    LiveScript broadcast(LiveBroadcast lb) {
+        this.broadcast = lb;
+        return this;
     }
 
     LiveScript(ScriptRuntime runtime, long seed, int[] limits, ScriptRuntime.Budget budget, AtomicBoolean cancel,
@@ -57,13 +73,28 @@ final class LiveScript implements StreamListener {
         this.writing = writing;
     }
 
+    /** Names the stream shown next to the build program ({@code program}, {@code repair1}, …). */
+    LiveScript codeKind(String kind) {
+        this.codeKind = kind == null ? "program" : kind;
+        return this;
+    }
+
     @Override
     public void onProgress(int contentChars, int reasoningChars) {
     }
 
     @Override
+    public void reasoning(String textSoFar) {
+        reasoningSoFar = textSoFar == null ? "" : textSoFar;
+        LiveBroadcast lb = broadcast;
+        if (lb != null) lb.reasoning(reasoningSoFar);
+    }
+
+    @Override
     public synchronized void onText(CharSequence contentSoFar) {
         if (closed) return;
+        LiveBroadcast lb = broadcast;
+        if (lb != null) lb.code(codeKind, contentSoFar);
         ScriptLint.Partial p = ScriptLint.partial(contentSoFar);
         if (p.part() != null && !p.part().equals(lastPart)) {
             lastPart = p.part();

@@ -81,13 +81,73 @@ function box(x1, y1, z1, x2, y2, z2, m, opts) {
     var mode = !opts ? 'fill' : opts.hollow ? 'hollow' : opts.walls ? 'walls' : opts.outline ? 'outline' : 'fill';
     return __box(x1, y1, z1, x2, y2, z2, m, mode);
 }
-function clear(x1, y1, z1, x2, y2, z2) { return __box(x1, y1, z1, x2, y2, z2, 'air', 'fill'); }
+function clear(x1, y1, z1, x2, y2, z2) {
+    if (x2 === undefined) { x2 = x1; y2 = y1; z2 = z1; } // clear(x, y, z): one cell
+    return __box(x1, y1, z1, x2, y2, z2, 'air', 'fill');
+}
 /** Line of blocks; r > 0 gives a round beam of that radius. Logs auto-orient along the line. */
 function line(a, b, m, r) { return __line(_v(a), _v(b), m, r || 0); }
 /** Block at a local position, e.g. 'oak_planks' or 'oak_stairs[facing=north,half=bottom,shape=straight]', or null. */
 function get(x, y, z) { return __get(x, y, z); }
 /** Legacy JSON operation, e.g. op({op:'roof', from:[0,6,0], to:[9,6,7], style:'gable', stairs:'spruce_stairs'}). */
 function op(o) { return __op(o); }
+
+// ---- queries: read what is already built instead of guessing its coordinates
+/**
+ * Rooms built so far (enclosed floors of 12+ cells that a door, stair or ladder reaches), largest first:
+ * {x1, z1, x2, z2, y, area, furniture, light}; y is the layer you stand in, x1..z2 the free floor inside the walls.
+ * World coordinates. Call it after the shells are built; furnish(room, type) takes one directly.
+ */
+function rooms() { return __rooms(); }
+/** World bounds [x1, y1, z1, x2, y2, z2] of a part (with its nested parts) as placed so far, or null. */
+function partBox(name) { return __partBox(name); }
+function isAir(x, y, z) { return get(x, y, z) === null; }
+/** A full opaque block (wall, floor, ceiling material), not glass, plants, furniture shapes or air. */
+function isSolid(x, y, z) { return __solid(x, y, z); }
+/** Highest solid y in column (x, z) at or below y0 (default 200), or null. */
+function surface(x, z, y0) {
+    for (var y = y0 === undefined ? 200 : y0; y >= -32; y--) if (isSolid(x, y, z)) return y;
+    return null;
+}
+/**
+ * Places a wall-mounted block (wall banner, wall torch, sign, item frame...) facing face on the real wall near
+ * (x, y, z): out of the wall if (x, y, z) is inside it, toward it if it stands in the open. Never replaces a block.
+ * Returns [x, y, z] or null when no wall is within 3 cells.
+ */
+function onWall(x, y, z, face, m) {
+    face = DIRS[face] ? face : 'south';
+    var p = _wallCell(x, y, z, face);
+    if (!p) {
+        // the wall is on the other side: it faces the other way
+        var back = OPPOSITE[face];
+        p = _wallCell(x, y, z, back);
+        if (!p) return null;
+        m = String(m).replace('facing=' + face, 'facing=' + back);
+    }
+    block(p[0], y, p[1], m);
+    return [p[0], y, p[1]];
+}
+function _wallCell(x, y, z, face) {
+    var d = DIRS[face], i;
+    for (i = 0; i < 4 && get(x, y, z) !== null; i++) { x += d[0]; z += d[1]; }
+    for (i = 0; i < 4 && get(x, y, z) === null && !isSolid(x - d[0], y, z - d[1]); i++) { x -= d[0]; z -= d[1]; }
+    return get(x, y, z) === null && isSolid(x - d[0], y, z - d[1]) ? [x, z] : null;
+}
+/** The air cell right under the ceiling above (x, y, z) (searching 8 up), or null when nothing is above. */
+function _underCeiling(x, y, z) {
+    var t = y;
+    while (t < y + 8 && get(x, t + 1, z) === null) t++;
+    return get(x, t + 1, z) === null ? null : t;
+}
+/** Hangs a light (default lantern) under the real ceiling above (x, y, z), on chain links if given. Returns its cell or null. */
+function hangFrom(x, y, z, m, chain) {
+    var t = get(x, y, z) === null ? _underCeiling(x, y, z) : null;
+    if (t === null) return null;
+    var i = 0;
+    for (; i < (chain || 0) && t - i > y; i++) block(x, t - i, z, 'iron_chain');
+    block(x, t - i, z, _base(m || 'lantern') + '[hanging=true]');
+    return [x, t - i, z];
+}
 
 // ---------------------------------------------------------------- shapes (signed-distance solids)
 
@@ -205,7 +265,10 @@ function stair(m, facing, half) {
     return name + '[facing=' + facing + ',half=' + (half || 'bottom') + ']';
 }
 /** Stair state when the block has stairs, else the block itself (furniture trims in any material). */
-function _stairOr(m, facing, half) { return stairsOf(m) || /_stairs$/.test(_base(m)) ? stair(m, facing, half) : m; }
+function _stairOr(m, facing, half) {
+    if (typeof _base(m) !== 'string') return m; // a mix()/grad() material has no single stair family
+    return stairsOf(m) || /_stairs$/.test(_base(m)) ? stair(m, facing, half) : m;
+}
 /** Slab state: slab('oak_planks', 'top'). */
 function slab(m, type) {
     var b = _base(m);
@@ -491,7 +554,7 @@ function dormer(x, y, z, face, opts) {
 /**
  * Window in an existing wall. (x, y, z) = bottom-centre cell of the opening in the wall plane; face = the side the
  * window looks out of ('south' for a front wall at the largest z). opts: w (1..5, default 1), h (default 2),
- * glass, frame (block around the opening, 1 cell proud of the wall), sill (true / block), shutters (trapdoor id),
+ * glass, frame (block around the opening, 1 cell proud of the wall), sill (true / block), shutters (true / trapdoor id),
  * arch (round top), recess (glass set back 1 cell into a thick wall).
  */
 function windowAt(x, y, z, face, opts) {
@@ -529,10 +592,12 @@ function windowAt(x, y, z, face, opts) {
         }
     }
     if (opts.shutters) {
+        // shutters: true takes the palette's trapdoor
+        var shutter = opts.shutters === true ? palette(opts.palette).shutter : opts.shutters;
         var gap = opts.frame ? 2 : 1, ls = cell(-half - gap, 0, 1), rs = cell(w - 1 - half + gap, 0, 1);
         for (var u3 = 0; u3 < h; u3++) {
-            block(ls[0], ls[1] + u3, ls[2], opts.shutters + '[facing=' + face + ',open=true]');
-            block(rs[0], rs[1] + u3, rs[2], opts.shutters + '[facing=' + face + ',open=true]');
+            block(ls[0], ls[1] + u3, ls[2], shutter + '[facing=' + face + ',open=true]');
+            block(rs[0], rs[1] + u3, rs[2], shutter + '[facing=' + face + ',open=true]');
         }
     }
 }
@@ -544,6 +609,8 @@ function windowAt(x, y, z, face, opts) {
 function door(x, y, z, face, opts) {
     opts = opts || {};
     var m = opts.m || 'oak_door', dir = DIRS[face], side = DIRS[LEFT_OF[face]];
+    // a wood name ('dark_oak', 'spruce_planks') means that wood's door
+    if (!/_door$/.test(m)) m = m.replace(/_(planks|log|wood)$/, '') + '_door';
     var facing = OPPOSITE[face], n = opts.w === 2 ? 2 : 1;
     for (var i = 0; i < n; i++) {
         var px = x + side[0] * i, pz = z + side[1] * i;
@@ -724,6 +791,12 @@ function _posts(a0, a1, every) {
  * Returns {x0, z0, x1, z1, top, roofY, floors: [y...], door: [x, y, z]}.
  */
 function volume(x1, z1, x2, z2, y, opts) {
+    // a building stands against walls and towers already built instead of cutting into them
+    __fit('volume x ' + x1 + '..' + x2 + ', z ' + z1 + '..' + z2);
+    try { return _volume(x1, z1, x2, z2, y, opts); } finally { __endfit(); }
+}
+
+function _volume(x1, z1, x2, z2, y, opts) {
     opts = opts || {};
     var P = palette(opts.palette || opts.style);
     ['base', 'wall', 'frame', 'beam', 'roofAlt', 'trim', 'gable', 'floor', 'shutter', 'glass'].forEach(function (k) {
@@ -846,7 +919,7 @@ function volume(x1, z1, x2, z2, y, opts) {
                 continue;
             }
             _split(inner[f2], typeof want === 'string' ? [want] : want, P).forEach(function (rm) {
-                var res = furnish(rm.x1, rm.z1, rm.x2, rm.z2, rm.y, rm.type, { wood: opts.wood || _woodOf(P.floor), stone: opts.hearth });
+                var res = furnish(rm.x1, rm.z1, rm.x2, rm.z2, rm.y, rm.type, { wood: opts.wood || _woodOf(P.floor), stone: opts.hearth === true ? undefined : opts.hearth });
                 rooms.push({ type: rm.type, floor: rm.floor, x1: rm.x1, z1: rm.z1, x2: rm.x2, z2: rm.z2, y: rm.y, pieces: res.pieces });
             });
         }
@@ -1013,6 +1086,8 @@ function curtainWall(points, y, h, opts) {
     var P = palette(opts.palette || 'castle'), t = opts.t || 3, half = Math.floor(t / 2);
     var m = opts.m || weather(grad('y', [[0, P.base], [0.25, P.wall], [1, P.wall]], { from: y, to: y + h }), 0.14);
     var outSign = opts.outside === 'right' ? -1 : 1, n = 0;
+    // walk: true (or omitted) paves the walkway with the palette floor; a block or material paves it with that
+    var walkM = opts.walk && opts.walk !== true ? opts.walk : P.floor;
     part('wall', function () {
         for (var i = 0; i + 1 < points.length; i++) {
             var a = points[i], b = points[i + 1];
@@ -1041,7 +1116,7 @@ function curtainWall(points, y, h, opts) {
                     }
                     block(Math.round(px + nx * (half + 2)), y + Math.floor((h - 2) / 2), Math.round(pz + nz * (half + 2)), stair(P.base, fOut, 'bottom'));
                 }
-                for (var o2 = -half; o2 <= half; o2++) block(Math.round(px + nx * o2), y + h - 1, Math.round(pz + nz * o2), opts.walk || P.floor);
+                for (var o2 = -half; o2 <= half; o2++) block(Math.round(px + nx * o2), y + h - 1, Math.round(pz + nz * o2), walkM);
             }
         }
     });
@@ -1051,7 +1126,8 @@ function curtainWall(points, y, h, opts) {
 
 /** Furniture wood set from a wood name (oak, spruce, dark_oak, birch, cherry, ...). */
 function _wood(w) {
-    w = w || 'spruce';
+    // 'spruce', 'spruce_planks', 'stripped_spruce_log' all mean spruce
+    w = typeof w === 'string' ? w.replace(/^stripped_/, '').replace(/_(planks|log|wood|stem|hyphae|stairs|slab|fence|door|trapdoor)$/, '') : 'spruce';
     var stem = w === 'crimson' || w === 'warped';
     return { planks: w + '_planks', slab: w + '_slab', stairs: w + '_stairs', fence: w + '_fence', trapdoor: w + '_trapdoor',
         log: 'stripped_' + w + (stem ? '_stem' : '_log'), door: w + '_door', name: w };
@@ -1091,6 +1167,13 @@ function fireplace(x, y, z, face, opts) {
 /** Light: standing lantern or hanging one (hanging: true, under a ceiling with an optional chain length). */
 function lamp(x, y, z, opts) {
     opts = opts || {};
+    if (opts.hanging && get(x, y + 1, z) === null) {
+        var t = _underCeiling(x, y, z);
+        if (t !== null) y = t;
+    } else if (!opts.hanging) {
+        // stand it on the floor below, not in the air
+        for (var k = 0; k < 8 && get(x, y - 1, z) === null; k++) y--;
+    }
     if (opts.hanging) {
         var chain = opts.chain || 0;
         for (var i = 0; i < chain; i++) block(x, y - i, z, 'iron_chain');
@@ -1098,6 +1181,11 @@ function lamp(x, y, z, opts) {
     } else block(x, y, z, opts.m || 'lantern');
 }
 /** Carpet rug over x1..x2 / z1..z2 at y, with an optional border colour. */
+/** Wall banner at (x, y, z) hanging on the wall behind it, looking out to face. */
+function banner(x, y, z, face, color) {
+    var c = (color || 'red').replace(/_(wall_)?banner$/, '');
+    if (!onWall(x, y, z, face || 'south', c + '_wall_banner[facing=' + (face || 'south') + ']')) __warn('banner at ' + x + ',' + y + ',' + z + ': no wall behind it within 3 cells, skipped');
+}
 function rug(x1, z1, x2, z2, y, color, border) {
     for (var x = x1; x <= x2; x++) for (var z = z1; z <= z2; z++) {
         var edge = border && (x === x1 || x === x2 || z === z1 || z === z2);
@@ -1116,7 +1204,15 @@ function kitchen(x, y, z, dir, n, face) {
 function chandelier(x, top, z, opts) {
     opts = opts || {};
     var drop = opts.drop === undefined ? 1 : opts.drop, m = opts.m || 'lantern', r = opts.r || 0;
-    for (var i = 0; i < drop; i++) block(x, top - i, z, 'iron_chain');
+    // m is the light (lantern, soul_lantern); any other block (a fence, a wall) is the hanger above a lantern
+    var hanger = /lantern$/.test(m) ? 'iron_chain' : m;
+    if (hanger !== 'iron_chain') m = 'lantern';
+    // hang from the real ceiling, not from the air under it
+    if (get(x, top, z) === null && get(x, top + 1, z) === null) {
+        var t = _underCeiling(x, top, z);
+        if (t !== null) top = t;
+    }
+    for (var i = 0; i < drop; i++) block(x, top - i, z, hanger);
     block(x, top - drop, z, m + '[hanging=true]');
     if (r >= 1) [[r, 0], [-r, 0], [0, r], [0, -r]].forEach(function (o) {
         // each outer light hangs from its own ceiling: find it, never overwrite a roof or beam
@@ -1305,26 +1401,43 @@ var _ROOMS = {
  * Returns {pieces: [...placed names]}.
  */
 function furnish(x1, z1, x2, z2, y, type, opts) {
+    if (x1 && typeof x1 === 'object' && !Array.isArray(x1)) {
+        // furnish(room, type, opts): a room from rooms()
+        return furnish(x1.x1, x1.z1, x1.x2, x1.z2, x1.y - 1, z1, x2);
+    }
     opts = opts || {};
     if (opts.replace) {
+        // take back only what furnish() placed and what is still there: stairs, walls or anything another part
+        // built over those cells since then stay
         for (var k in _FURNISHED) {
             var c = _FURNISHED[k];
             if (c[3] === y && c[0] >= Math.min(x1, x2) && c[0] <= Math.max(x1, x2) && c[2] >= Math.min(z1, z2) && c[2] <= Math.max(z1, z2)) {
-                block(c[0], c[1], c[2], 'air');
+                if (get(c[0], c[1], c[2]) === c[4]) block(c[0], c[1], c[2], 'air');
                 delete _FURNISHED[k];
             }
         }
     }
-    // record every block this call places, so a later furnish(..., {replace: true}) can take the room back
-    var outer = block;
+    // furniture goes only into air (or over furniture this room placed), never into walls, stairs or floors, and
+    // every block is recorded so a later furnish(..., {replace: true}) can take the room back
+    var outer = block, skipped = 0;
     block = function (bx, by, bz, m) {
-        if (by > y && get(bx, by, bz) === null) _FURNISHED[bx + ',' + by + ',' + bz] = [bx, by, bz, y];
+        var key = bx + ',' + by + ',' + bz, cur = get(bx, by, bz), own = _FURNISHED[key];
+        // the floor layer itself may be re-tiled (a hearth stone, a rug's border inset)
+        var floorTile = by <= y && isSolid(bx, by, bz) && m !== 'air';
+        if (cur !== null && !(own && own[4] === cur) && !floorTile) {
+            if (by > y) skipped++;
+            return;
+        }
         outer(bx, by, bz, m);
+        var now = get(bx, by, bz);
+        if (now === null || by <= y) delete _FURNISHED[key];
+        else _FURNISHED[key] = [bx, by, bz, y, now];
     };
     try {
         return _furnish(x1, z1, x2, z2, y, type, opts);
     } finally {
         block = outer;
+        if (skipped) __warn('furnish ' + type + ' at y=' + y + ': ' + skipped + ' furniture cells were already occupied (walls, stairs, other parts) and kept');
     }
 }
 var _FURNISHED = {};
@@ -1588,7 +1701,7 @@ function tree(x, y, z, opts) {
     for (k in base) sp[k] = base[k];
     if (opts.leaves) sp.leaves = opts.leaves;
     if (opts.log) { sp.log = opts.log; sp.wood = opts.log; }
-    var h = opts.h || sp.h, cr = opts.crown || sp.crown * h / sp.h;
+    var h = Math.max(3, Math.round(opts.h || sp.h)), cr = opts.crown || sp.crown * h / sp.h;
     var out;
     part('tree', function () {
         if (sp.conifer) out = _conifer(x, y, z, h, cr, sp, opts);

@@ -6,6 +6,7 @@ import com.google.gson.JsonParser;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -29,6 +30,8 @@ public final class BlockTextures {
     /** Mip levels per tile: 16, 8, 4, 2, 1 pixels wide. */
     private final int[][][] mips;
     private final Map<String, int[]> faces;
+    /** Lazily encoded {@link #png()}; the atlas never changes, so this is computed at most once. */
+    private volatile byte[] png;
 
     BlockTextures(List<int[]> tiles, Map<String, int[]> faces) {
         this.tiles = tiles.toArray(int[][]::new);
@@ -49,6 +52,46 @@ public final class BlockTextures {
     /** {top, side, bottom} tile indices of a block, or null when unknown. */
     public int[] faces(String block) {
         return faces.get(block);
+    }
+
+    /** Tiles per atlas row; tile {@code n} sits at column {@code n % cols()}, row {@code n / cols()}. */
+    public static int cols() {
+        return COLS;
+    }
+
+    /** Tile edge in pixels. */
+    public static int tileSize() {
+        return S;
+    }
+
+    /**
+     * The whole atlas as a PNG, for clients that draw with real textures (the live view).
+     *
+     * <p>Encoded once and cached: the atlas is immutable, and re-encoding it for every live frame would cost
+     * more than the frame itself. Returns null when no textures are installed.</p>
+     */
+    public byte[] png() {
+        byte[] cached = png;
+        if (cached != null) return cached;
+        synchronized (this) {
+            if (png == null) {
+                try {
+                    png = writePng();
+                } catch (IOException e) {
+                    return null;
+                }
+            }
+            return png;
+        }
+    }
+
+    private byte[] writePng() throws IOException {
+        int rows = (tiles.length + COLS - 1) / COLS;
+        BufferedImage atlas = new BufferedImage(COLS * S, Math.max(1, rows) * S, BufferedImage.TYPE_INT_ARGB);
+        for (int i = 0; i < tiles.length; i++) atlas.setRGB((i % COLS) * S, (i / COLS) * S, S, S, tiles[i], 0, S);
+        ByteArrayOutputStream out = new ByteArrayOutputStream(256 * 1024);
+        ImageIO.write(atlas, "png", out);
+        return out.toByteArray();
     }
 
     public int tileCount() {
@@ -110,7 +153,7 @@ public final class BlockTextures {
     }
 
     /** Reads a saved atlas, or returns null when it is missing. */
-    static BlockTextures load(File dir) throws IOException {
+    public static BlockTextures load(File dir) throws IOException {
         File png = new File(dir, "atlas.png"), json = new File(dir, "faces.json");
         if (!png.isFile() || !json.isFile()) return null;
         BufferedImage atlas = ImageIO.read(png);

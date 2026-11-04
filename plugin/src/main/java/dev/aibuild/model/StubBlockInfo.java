@@ -131,10 +131,13 @@ public final class StubBlockInfo implements BlockInfo {
                 || n.equals("chiseled_bookshelf") || n.equals("decorated_pot")) {
             d.put("facing", "north");
             if (n.equals("grindstone")) d.put("face", "wall");
+            if (n.equals("bell")) { d.put("attachment", "floor"); d.put("powered", "false"); }
         } else if (n.equals("water_cauldron")) {
             d.put("level", "1");
         } else if (n.equals("composter")) {
             d.put("level", "0");
+        } else if (n.equals("vine")) {
+            for (String side : List.of("north", "east", "south", "west", "up")) d.put(side, "false");
         }
         return d;
     }

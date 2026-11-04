@@ -20,6 +20,9 @@ import dev.aibuild.build.BuildStore;
 import dev.aibuild.build.BuildVersion;
 import dev.aibuild.config.BuildMode;
 import dev.aibuild.config.PluginConfig;
+import dev.aibuild.live.LiveBroadcast;
+import dev.aibuild.live.LiveSession;
+import dev.aibuild.live.TraceStep;
 import dev.aibuild.model.BlockInfo;
 import dev.aibuild.model.BlockSpec;
 import dev.aibuild.model.ShapeResolver;
@@ -52,6 +55,7 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
@@ -90,6 +94,15 @@ public final class BuildPipeline {
     });
     private final Map<String, Job> jobsByBuild = new ConcurrentHashMap<>();
     private final AtomicInteger threadNo = new AtomicInteger();
+    /**
+     * Live-view links (null when the feature is off). Set by the plugin after construction; every use is
+     * null-checked, so a plain pipeline (benchmarks, tests) needs no live view at all.
+     */
+    private volatile LiveSession.Registry liveLinks;
+    /** Human-readable status of the live-link server for {@code /aib watch}, null when off. */
+    private volatile java.util.function.Supplier<String> liveStatus;
+    /** Resolves the user-facing live URL of a session (tunnel / reverse proxy address), null when not announced. */
+    private volatile java.util.function.Function<LiveSession, String> liveUrlResolver;
 
     public BuildPipeline(Plugin plugin, BuildStore store, WorldPlacer placer, BlockInfo info, Supplier<LlmClient> llm,
                          Supplier<PluginConfig> cfg, Supplier<String> blockList) {
@@ -109,6 +122,122 @@ public final class BuildPipeline {
 
     public Collection<Job> jobs() {
         return jobsByBuild.values();
+    }
+
+    /** Attaches live-view links; {@code null} turns the feature off. */
+    public void liveLinks(LiveSession.Registry registry) {
+        this.liveLinks = registry;
+    }
+
+    /** Sets the one-line status text {@code /aib watch} shows (null when the server is off). */
+    public void liveStatus(java.util.function.Supplier<String> status) {
+        this.liveStatus = status;
+    }
+
+    /**
+     * Sets the resolver for the URL shown to a person (null disables live links in chat). It may return null for
+     * a link nobody outside the machine could open, in which case only the console URL is logged.
+     */
+    public void liveUrl(java.util.function.Function<LiveSession, String> resolver) {
+        this.liveUrlResolver = resolver;
+    }
+
+    /** One-line status of the live-view server, or null when the feature is off. */
+    public String liveStatus() {
+        java.util.function.Supplier<String> s = liveStatus;
+        return s == null ? null : s.get();
+    }
+
+    /** The current live link of a build, or null. */
+    public LiveSession liveFor(String buildId) {
+        LiveSession.Registry r = liveLinks;
+        return r == null ? null : r.forBuild(buildId);
+    }
+
+    /**
+     * A listener that shows the streamed answer of a non-script-stage call (a critic's rewrite, an edit) on the
+     * page, so the viewer always sees what the model is writing, not just the initial program.
+     */
+    private StreamListener codeStream(Job job, String kind) {
+        LiveBroadcast lb = live(job);
+        if (lb == LiveBroadcast.NOOP) return null;
+        return new StreamListener() {
+            @Override
+            public void onProgress(int contentChars, int reasoningChars) {
+            }
+
+            @Override
+            public void onText(CharSequence textSoFar) {
+                lb.code(kind, textSoFar);
+            }
+
+            @Override
+            public void reasoning(String textSoFar) {
+                lb.reasoning(textSoFar);
+            }
+        };
+    }
+
+    /** The trace of a job, or null when it has no viewer. */
+    private LiveBroadcast traceOf(Job job) {
+        return live(job);
+    }
+
+    /**
+     * Records one debuggable step. Wrapped so a broken viewer can never break a build, and so callers can stay
+     * one-liners at the point where the interesting data actually exists.
+     */
+    private TraceStep.Builder trace(Job job, TraceStep.Kind kind, String tag) {
+        return new TraceStep.Builder(kind, tag);
+    }
+
+    /** Publishes a finished step to the viewer, if there is one. */
+    private void traceDone(Job job, TraceStep.Builder step) {
+        LiveBroadcast lb = traceOf(job);
+        if (lb != LiveBroadcast.NOOP) lb.trace(step);
+    }
+
+    /**
+     * The prompt as a person needs to read it: every message, with the role, so a wrong instruction or a missing
+     * block list is visible instead of guessed at.
+     */
+    private static String renderMessages(List<ChatMessage> msgs) {
+        StringBuilder b = new StringBuilder();
+        for (ChatMessage m : msgs) {
+            b.append("[").append(m.role()).append("]");
+            if (m.hasImages()) b.append(" +").append(m.imageCount()).append(" image(s)");
+            b.append("\n").append(m.content()).append("\n\n");
+        }
+        return b.toString();
+    }
+
+    /** One-line description of a model answer: enough to recognise it in a list of a hundred. */
+    private static String summarise(String answer, String unit, long ms) {
+        String flat = answer == null ? "" : answer.replaceAll("\\s+", " ").strip();
+        String head = flat.length() <= 160 ? flat : flat.substring(0, 160) + "…";
+        return head + (unit == null ? "" : "  · " + answer.length() + " " + unit) + " · " + ms + " ms";
+    }
+
+    /** Reports a pipeline stage to the live page. */
+    private void stage(Job job, String stage, String title, double progress) {
+        LiveBroadcast lb = live(job);
+        if (lb != LiveBroadcast.NOOP) lb.stage(stage, title, progress);
+    }
+
+    /**
+     * Coarse stage labels for the page's timeline. The pipeline still sets its own Russian status lines for the
+     * boss bar; these are short, stable English ids the page can group on (stage id + human title).
+     */
+    private void stageOf(Job job, String stage, String title) {
+        stage(job, stage, title, job.progress);
+    }
+
+    /** The live session of a running job, or {@link LiveBroadcast#NOOP} when the build has no viewer. */
+    private LiveBroadcast live(Job job) {
+        LiveSession.Registry r = liveLinks;
+        if (r == null || job == null || job.quiet) return LiveBroadcast.NOOP;
+        LiveSession s = r.forBuild(job.buildId);
+        return s == null ? LiveBroadcast.NOOP : s;
     }
 
     public Job jobFor(String buildId) {
@@ -136,6 +265,10 @@ public final class BuildPipeline {
     public Job startCreate(Build build, String prompt, Anchor anchor, BuildMode mode) {
         Job job = new Job(build.id, build.owner, Job.Kind.CREATE, prompt, mode);
         jobsByBuild.put(build.id, job);
+        // The link comes first: the "queued" stage is published through the session, and resolving it before
+        // the old session is superseded would write this job's first event into the previous run's page.
+        openLiveLink(job, build);
+        stage(job, "queued", "Job queued", 0);
         job.future = pool.submit(() -> runGuarded(job, build, () -> runCreate(job, build, prompt, anchor, false)));
         return job;
     }
@@ -143,8 +276,50 @@ public final class BuildPipeline {
     public Job startEdit(Build build, String change, BuildMode mode) {
         Job job = new Job(build.id, build.owner, Job.Kind.EDIT, change, mode);
         jobsByBuild.put(build.id, job);
+        openLiveLink(job, build);
+        stage(job, "queued", "Edit queued", 0);
         job.future = pool.submit(() -> runGuarded(job, build, () -> runEdit(job, build, change)));
         return job;
+    }
+
+    /**
+     * Issues the one-time link a player can open to watch this job. The link is announced only to the owner
+     * (and to the console, which has nobody else to tell), because it is an unauthenticated URL: whoever holds
+     * it sees the plot. Quiet jobs (benchmarks) get no link.
+     */
+    private void openLiveLink(Job job, Build build) {
+        LiveSession.Registry r = liveLinks;
+        if (r == null || job.quiet) return;
+        try {
+            LiveSession session = r.open(job, build == null ? "Build" : build.name,
+                    build == null || build.ownerName == null ? "console" : build.ownerName, info);
+            job.live = session;
+            String url = liveUrl(session);
+            if (url != null) {
+                sayLink(job, "<gray>Смотреть в браузере (одна ссылка на эту постройку, живёт до её конца): </gray>", url);
+                Msg.toLink(job.owner, "<gray>Прямая ссылка: </gray>", url);
+            } else {
+                // Never the token itself: this log line lands in logs/latest.log and in pasted bug reports, and
+                // the token is the only thing protecting the page. The prefix identifies the session for
+                // troubleshooting; the operator can get the full link from /aib watch while the job runs.
+                plugin.getLogger().info("Live view for build " + job.buildId + " opened (token " + session.tokenPrefix()
+                        + "…) — set generation.live-view.public-url to give players a clickable link");
+            }
+        } catch (RuntimeException e) {
+            plugin.getLogger().log(Level.WARNING, "live view could not be opened for build " + job.buildId, e);
+        }
+    }
+
+    /** The URL to show a person, or null when the link would not work from their machine. */
+    private String liveUrl(LiveSession session) {
+        java.util.function.Function<LiveSession, String> r = liveUrlResolver;
+        if (r == null) return null;
+        try {
+            String url = r.apply(session);
+            return url == null || url.isBlank() ? null : url;
+        } catch (RuntimeException e) {
+            return null;
+        }
     }
 
     private interface Task {
@@ -153,21 +328,26 @@ public final class BuildPipeline {
 
     private void runGuarded(Job job, Build build, Task task) {
         BuildMetadata previous = null;
+        String outcome = "done";
         try {
             previous = sync(() -> new BuildMetadata(build.name, build.originalPrompt,
                     build.plan == null ? null : build.plan.deepCopy()));
             task.run();
         } catch (VerificationRejectedException e) {
+            outcome = "rejected";
             restoreCurrent(build, previous);
             say(job, "<yellow>Правка <white><v0></white> не прошла проверку. Прежняя версия восстановлена; черновик сохранён. <v1></yellow>",
                     build.id, clip(e.getMessage(),180));
         } catch (CancelledException | InterruptedException e) {
+            outcome = "cancelled";
             say(job, "<yellow>Задача для постройки <white><v0></white> отменена.</yellow>", build.id);
             restoreCurrent(build, previous);
         } catch (Exception e) {
             if (job.cancelled.get()) {
+                outcome = "cancelled";
                 say(job, "<yellow>Задача для постройки <white><v0></white> отменена.</yellow>", build.id);
             } else {
+                outcome = "failed";
                 plugin.getLogger().log(Level.WARNING, "AI job failed for build " + build.id, e);
                 say(job, "<red>Ошибка ИИ: <v0></red>", shortError(e));
             }
@@ -175,6 +355,7 @@ public final class BuildPipeline {
         } finally {
             job.finished = true;
             jobsByBuild.remove(build.id, job);
+            live(job).finish(outcome, job.status);
         }
     }
 
@@ -226,6 +407,7 @@ public final class BuildPipeline {
     private void runCreate(Job job, Build build, String prompt, Anchor anchor, boolean isRebuild) throws Exception {
         PluginConfig c = cfg.get();
         Transcript tr = new Transcript(build.id, c.saveTranscripts);
+        tr.liveJob = job;
         Staged st = switch (c.createStrategy) {
             case "script" -> designAndScript(job, tr, prompt, build, anchor, isRebuild);
             case "compiled" -> designAndCompile(job, tr, prompt, build, anchor, isRebuild);
@@ -254,6 +436,7 @@ public final class BuildPipeline {
                                    boolean isRebuild) throws Exception {
         PluginConfig c = cfg.get();
         job.status("ИИ пишет программу постройки…", 0.02);
+        stageOf(job, "program", "Writing the build program");
         int ext = c.maxExtent;
         int[] safety = {-ext, -32, -ext, ext, Math.min(320, ext * 2), ext};
         ScriptRuntime runtime = new ScriptRuntime(info, job.stdlib);
@@ -324,7 +507,10 @@ public final class BuildPipeline {
         job.doorways.addAll(result.doorways());
         tr.note("script result", "parts:\n" + result.partTable(40) + "\nresolver: " + postProcess(job, model));
         job.scriptModel = model.copy();
-        livePreview(build, model);
+        liveParts(job, result);
+        // "script result" rather than "final": commit() emits the final model later, and two rows with the same
+        // title made it look like the trace was duplicating entries.
+        liveModel(job, build, model, "script result");
         say(job, "<gray>Программа выполнена: <white><v0></white>, <v1> блоков, частей: <v2>. Проверяем постройку.</gray>",
                 Json.str(plan, "title", "Постройка"), model.nonAirCount(), result.parts().size());
         Staged st = new Staged();
@@ -352,6 +538,7 @@ public final class BuildPipeline {
         boolean on = job.concepts != null ? job.concepts : c.concepts(job.mode.id);
         if (!on || runtime.stdlib() == dev.aibuild.script.Stdlib.V1) return List.of();
         job.status("ИИ продумывает замысел постройки…", 0.01);
+        stageOf(job, "concept", "Designing a concept");
         try {
             String answer = callRaw(job, tr, "concepts", List.of(
                     ChatMessage.system(ScriptPrompts.system(runtime.stdlib(), c.includeBlockList ? blockList.get() : null)),
@@ -388,17 +575,30 @@ public final class BuildPipeline {
         msgs.add(ChatMessage.system(ScriptPrompts.system(runtime.stdlib(), c.includeBlockList ? blockList.get() : null)));
         msgs.add(ChatMessage.user(ScriptPrompts.create(runtime.stdlib(), prompt, scaleHint(job.mode, runtime.stdlib()), concept)));
         for (int attempt = 0; attempt <= c.scriptRepairAttempts; attempt++) {
-            LiveScript live = show == null ? null : new LiveScript(runtime, seed, safety, budget, job.cancelled, side,
+            LiveScript live = new LiveScript(runtime, seed, safety, budget, job.cancelled, side,
                     partial -> {
                         prepare(partial);
-                        show.accept(partial);
+                        if (show != null) show.accept(partial);
+                        // The page always sees the partial build, whatever generation.live-preview says: that
+                        // switch governs the in-world preview, and a viewer who opened the live link still
+                        // expects to watch the AI's program take shape.
+                        LiveBroadcast lb = live(job);
+                        if (lb != LiveBroadcast.NOOP) {
+                            lb.preview(true, partial.model().nonAirCount(), partial.model().size());
+                            lb.model(partial.model(), "stream");
+                        }
                     },
-                    part -> job.status("ИИ пишет часть «" + clip(part, 40) + "»…", job.progress));
+                    part -> {
+                        job.status("ИИ пишет часть «" + clip(part, 40) + "»…", job.progress);
+                        LiveSession s = liveLinks == null ? null : liveLinks.forBuild(job.buildId);
+                        if (s != null) s.part(part);
+                    });
+            live.codeKind(attempt == 0 ? "program" : "repair" + attempt).broadcast(live(job));
             String answer;
             try {
                 answer = callText(job, tr, attempt == 0 ? tag : tag + "-repair" + attempt, job.mode.effortBuild, msgs, live);
             } finally {
-                if (live != null) live.close();
+                live.close();
             }
             String source = ScriptLint.extract(answer);
             job.status("Выполнение программы постройки…", 0.05 + attempt * 0.02);
@@ -407,6 +607,24 @@ public final class BuildPipeline {
                     + " instructions=" + result.instructions() + "\nwarnings: " + result.warnings() + "\nlogs: " + result.logs()
                     + (result.ok() ? "\nparts:\n" + result.partTable(40) : "\n" + result.error().describe()));
             tr.note(tag + "-" + attempt + ".js", source);
+            // The program and the run are the two things a person debugging a bad build needs side by side:
+            // what the AI wrote, and exactly how the sandbox rejected or accepted it.
+            traceDone(job, trace(job, TraceStep.Kind.SCRIPT, tag + "-run-" + attempt)
+                    .title("Script run · " + tag + (attempt > 0 ? " (attempt " + (attempt + 1) + ")" : ""))
+                    .ok(result.ok())
+                    .took(result.elapsedMs())
+                    .summary(result.ok()
+                            ? result.model().nonAirCount() + " blocks · " + result.instructions() + " instructions"
+                            : "failed: " + clip(result.error().message(), 140))
+                    .field("source", source)
+                    .field("ok", result.ok())
+                    .field("blocks", result.model().nonAirCount())
+                    .field("instructions", result.instructions())
+                    .field("elapsed ms", result.elapsedMs())
+                    .field("warnings", result.warnings())
+                    .field("logs", result.logs())
+                    .field("parts", result.ok() ? result.partTable(40) : null)
+                    .field("error", result.ok() ? null : result.error().describe()));
             if (result.ok()) {
                 prepare(result);
                 if (show != null) show.accept(result);
@@ -415,6 +633,10 @@ public final class BuildPipeline {
                         StructureAnalyzer.analyze(result.model(), info, analyzerOptions(plan)), concept);
             }
             checkCancelled(job);
+            // The page shows a failed run too: a viewer watching the program stop needs to know it stopped,
+            // and the event carries `ok` precisely so the two outcomes are distinguishable.
+            LiveBroadcast failed = live(job);
+            if (failed != LiveBroadcast.NOOP) failed.preview(false, result.model().nonAirCount(), source.length());
             plugin.getLogger().info("[" + tag + "] attempt " + attempt + " failed: " + result.error().message());
             if (attempt < c.scriptRepairAttempts) {
                 say(job, "<gray>Программа остановилась: <white><v0></white>. ИИ исправляет…</gray>", clip(result.error().message(), 160));
@@ -445,6 +667,8 @@ public final class BuildPipeline {
                     });
                 }
                 if (build.placed || job.liveAnchored) livePreview(build, m);
+                LiveBroadcast lb = live(job);
+                if (lb != LiveBroadcast.NOOP) lb.model(m, "stream");
             } catch (Exception e) {
                 plugin.getLogger().log(Level.FINE, "streaming preview failed", e);
             }
@@ -632,6 +856,7 @@ public final class BuildPipeline {
         parts.values().stream().sorted((a, b) -> Integer.compare(b.cells(), a.cells())).limit(40)
                 .forEach(p -> table.append("- ").append(p.describe()).append('\n'));
         job.status("Арт-директор выбирает, что доработать…", 0.5);
+        stageOf(job, "director", "Art director picks parts to refine");
         String evidence = withAutoNotes(job, rep.toText());
         String dirAnswer = callRaw(job, tr, "director", List.of(ChatMessage.system(system),
                 ChatMessage.user(ScriptPrompts.director(prompt, job.concept, table.toString(), evidence, max, refine(job)),
@@ -655,7 +880,9 @@ public final class BuildPipeline {
         }
         say(job, "<gray>Арт-директор: дорабатываем <white><v0></white>.</gray>", String.join(", ", picks.stream().map(q -> q[0]).toList()));
         job.status("Скульпторы дорабатывают части: " + clip(String.join(", ", picks.stream().map(q -> q[0]).toList()), 60) + "…", 0.58);
-        int crit0 = rep.count(dev.aibuild.analysis.Severity.CRITICAL), maj0 = rep.count(dev.aibuild.analysis.Severity.MAJOR);
+        stageOf(job, "sculpt", "Sculptors refine parts");
+        prepare(base);
+        QualityVector q0 = QualityVector.of(rep, base);
         List<Future<PartRewrite>> futures = new ArrayList<>();
         // one stop flag per sculptor: set when the job is cancelled or the sculptors' time is up
         List<java.util.concurrent.atomic.AtomicBoolean> stops = new ArrayList<>();
@@ -665,7 +892,7 @@ public final class BuildPipeline {
             var stop = new java.util.concurrent.atomic.AtomicBoolean();
             stops.add(stop);
             futures.add(side.submit(() -> sculptPart(job, tr, tag, effort, prompt, system, runtime, budget, limits, source, model,
-                    part, brief, aopts, crit0, maj0, stop)));
+                    part, brief, aopts, base, q0, stop)));
         }
         long deadline = System.nanoTime() + c.sculptTimeout * 1_000_000_000L;
         List<PartRewrite> ok = new ArrayList<>();
@@ -700,7 +927,11 @@ public final class BuildPipeline {
             if (!run.ok()) continue;
             prepare(run);
             AnalysisReport nrep = StructureAnalyzer.analyze(run.model(), info, aopts);
-            if (nrep.count(dev.aibuild.analysis.Severity.CRITICAL) > crit0 || nrep.count(dev.aibuild.analysis.Severity.MAJOR) > maj0) continue;
+            List<String> worse = QualityVector.of(nrep, run).regressions(q0);
+            if (!worse.isEmpty()) {
+                tr.note("sculpt merge dropped " + r.name(), "together with the other rewrites: " + String.join(", ", worse));
+                continue;
+            }
             merged = patch.source();
             mergedResult = run;
             kept.add(r.name());
@@ -763,7 +994,7 @@ public final class BuildPipeline {
     private PartRewrite sculptPart(Job job, Transcript tr, String tag, String effort, String prompt, String system,
                                    ScriptRuntime runtime, ScriptRuntime.Budget budget, int[] limits, String source,
                                    VoxelModel model, ScriptResult.Part part, String brief, AnalyzerOptions aopts,
-                                   int crit0, int maj0, java.util.concurrent.atomic.AtomicBoolean stop) throws Exception {
+                                   ScriptResult base, QualityVector q0, java.util.concurrent.atomic.AtomicBoolean stop) throws Exception {
         String name = leaf(part.name());
         String current = ScriptPatch.partSource(source, name);
         if (current == null) return null;
@@ -782,11 +1013,19 @@ public final class BuildPipeline {
                     prepare(run);
                     AnalysisReport nrep = StructureAnalyzer.analyze(run.model(), info, aopts);
                     int crit = nrep.count(dev.aibuild.analysis.Severity.CRITICAL), maj = nrep.count(dev.aibuild.analysis.Severity.MAJOR);
-                    tr.note(tag + "-run-" + attempt, "ok blocks=" + run.model().nonAirCount() + " critical=" + crit + " major=" + maj);
-                    if (crit <= crit0 && maj <= maj0) {
+                    QualityVector nq = QualityVector.of(nrep, run);
+                    List<String> worse = nq.regressions(q0);
+                    int lost = foreignLoss(base, run, part.name(), info);
+                    tr.note(tag + "-run-" + attempt, "ok blocks=" + run.model().nonAirCount() + " critical=" + crit + " major=" + maj
+                            + " other parts lost " + lost + "\n" + nq.describe());
+                    if (worse.isEmpty() && lost <= FOREIGN_LOSS_MAX) {
                         return new PartRewrite(name, ScriptPatch.partSource(patch.source(), name), crit, maj);
                     }
-                    problem = "the rewrite adds analyzer problems:\n" + clip(nrep.toText(), 1500);
+                    problem = lost > FOREIGN_LOSS_MAX ? "your rewrite removes or covers " + lost + " blocks that OTHER parts built (their"
+                            + " walls, floors, stairs). Those cells are locked: change only your own part's blocks and leave the"
+                            + " neighbours' cells as they are; use partBox(name) to see where a neighbour stands."
+                            : "the rewrite makes the build worse: " + String.join(", ", worse) + "\n"
+                            + (run.collisionText().isEmpty() ? "" : "Collisions:\n" + run.collisionText()) + clip(nrep.toText(), 1500);
                 } else {
                     problem = "the script with your rewrite fails:\n" + run.error().describe();
                 }
@@ -803,6 +1042,29 @@ public final class BuildPipeline {
         return null;
     }
 
+    /** How many cells of other parts a part's rewrite may empty before it counts as breaking them. */
+    static final int FOREIGN_LOSS_MAX = 12;
+
+    /**
+     * Walls, floors, stairs and doors other parts built in {@code before} that are empty, or covered with loose
+     * decoration, in {@code after}: what a rewrite of {@code part} broke around it. Plants and trees giving way to
+     * a moved wall are not breakage.
+     */
+    static int foreignLoss(ScriptResult before, ScriptResult after, String part, BlockInfo info) {
+        int n = 0;
+        for (Map.Entry<Long, String> e : before.owners().entrySet()) {
+            String o = e.getValue();
+            if (o.equals(part) || o.startsWith(part + "/") || part.startsWith(o + "/")) continue;
+            long k = e.getKey();
+            BlockSpec was = before.model().get(VoxelModel.kx(k), VoxelModel.ky(k), VoxelModel.kz(k));
+            BlockSpec now = after.model().get(VoxelModel.kx(k), VoxelModel.ky(k), VoxelModel.kz(k));
+            if (was == null || was.isAir() || !dev.aibuild.model.BlockRoles.structural(was, info) && !dev.aibuild.model.BlockRoles.access(was)
+                    || was.name().endsWith("_leaves") || was.name().endsWith("_log") || was.name().endsWith("_wood")) continue;
+            if (now == null || now.isAir() || dev.aibuild.model.BlockRoles.decor(now, info) && !dev.aibuild.model.BlockRoles.decor(was, info)) n++;
+        }
+        return n;
+    }
+
     /** Up to four rooms seen from above with everything higher removed, largest first. */
     private byte[] interiorSheet(VoxelModel model, List<AnalysisReport.Room> rooms) {
         List<int[]> boxes = new ArrayList<>();
@@ -817,26 +1079,42 @@ public final class BuildPipeline {
     /** The script's own interior part (interior, interiors, furniture, rooms...), or null when it has none. */
     static String interiorPart(String source) {
         for (String n : dev.aibuild.script.ScriptLint.partNames(source)) {
-            String l = n.toLowerCase(Locale.ROOT);
-            if (l.equals("interiors") || l.equals("interior") || l.equals("furniture") || l.equals("furnishing") || l.equals("rooms")) return n;
+            if (dev.aibuild.script.Canvas.interiorName(n)) return n;
         }
         return null;
     }
 
     /**
      * Cells that differ between two models outside every room box (the room's floor cells, from its floor layer up
-     * to 8 above): an interior rewrite must change nothing there.
+     * to 8 above): an interior rewrite must change nothing there. The ring of cells around a box counts as inside for
+     * furniture, since a bed or shelf against the wall hides the floor it stands on; walls, windows and doors there
+     * stay protected.
      */
-    public static int changesOutsideRooms(VoxelModel before, VoxelModel after, List<AnalysisReport.Room> rooms) {
+    public static int changesOutsideRooms(VoxelModel before, VoxelModel after, List<AnalysisReport.Room> rooms, BlockInfo info) {
+        return changesOutsideRooms(before, after, rooms, info, new ArrayList<>(), new int[1]);
+    }
+
+    /**
+     * As above, with up to six of the changed cells described into {@code samples} and how many of them touch a
+     * wall, floor, window or door (not just loose decoration) in {@code shell[0]}.
+     */
+    static int changesOutsideRooms(VoxelModel before, VoxelModel after, List<AnalysisReport.Room> rooms, BlockInfo info,
+                                   List<String> samples, int[] shell) {
         int[] n = {0};
         VoxelModel.CellConsumer check = (x, y, z, s) -> {
             BlockSpec a = before.get(x, y, z), b = after.get(x, y, z);
-            boolean same = a == null || a.isAir() ? b == null || b.isAir() : a.equals(b);
+            // by block type: a pane or fence in the wall reconnects to furniture placed beside it
+            boolean same = a == null || a.isAir() ? b == null || b.isAir() : b != null && a.name().equals(b.name());
             if (same) return;
+            boolean furniture = !dev.aibuild.model.BlockRoles.structural(a, info) && !dev.aibuild.model.BlockRoles.structural(b, info);
             for (AnalysisReport.Room r : rooms) {
-                if (x >= r.x1() && x <= r.x2() && z >= r.z1() && z <= r.z2() && y >= r.y() - 1 && y <= r.y() + 8) return;
+                int ring = furniture ? 1 : 0;
+                if (x >= r.x1() - ring && x <= r.x2() + ring && z >= r.z1() - ring && z <= r.z2() + ring
+                        && y >= r.y() - 1 && y <= r.y() + 8) return;
             }
-            n[0]++;
+            if (!furniture) shell[0]++;
+            if (n[0]++ < 6) samples.add("(" + x + "," + y + "," + z + ") " + (a == null || a.isAir() ? "air" : a.name()) + " -> "
+                    + (b == null || b.isAir() ? "air" : b.name()));
         };
         before.forEach(check);
         after.forEach((x, y, z, s) -> {
@@ -846,6 +1124,7 @@ public final class BuildPipeline {
         return n[0];
     }
 
+    /** Full blocks that are furniture inside a room rather than part of its walls. */
     /**
      * Interior designer: one call that furnishes every room found inside the build, seeing the rooms from above.
      * Its statement replaces the script's interior part or is appended. Kept only when it runs, changes nothing
@@ -853,7 +1132,7 @@ public final class BuildPipeline {
      */
     private PartRewrite designInterior(Job job, Transcript tr, String prompt, String system, ScriptRuntime runtime,
                                        ScriptRuntime.Budget budget, int[] limits, String source, VoxelModel model,
-                                       AnalysisReport rep, AnalyzerOptions aopts, boolean eyes,
+                                       AnalysisReport rep, AnalyzerOptions aopts, boolean eyes, QualityVector q0,
                                        java.util.concurrent.atomic.AtomicBoolean stop) throws Exception {
         List<AnalysisReport.Room> rooms = rep.roomList.stream().limit(10).toList();
         String target = interiorPart(source), name = target != null ? target : "interiors";
@@ -863,7 +1142,6 @@ public final class BuildPipeline {
                 target == null ? null : ScriptPatch.partSource(source, target), source, eyes);
         List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
                 eyes ? ChatMessage.user(user, List.of(interiorSheet(model, rooms))) : ChatMessage.user(user)));
-        int crit0 = rep.count(dev.aibuild.analysis.Severity.CRITICAL), maj0 = rep.count(dev.aibuild.analysis.Severity.MAJOR);
         String answer = callText(job, tr, "interior", cfg.get().sculptEffort, msgs, null, stop);
         for (int attempt = 0; attempt < 2; attempt++) {
             ScriptPatch.Result patch = ScriptPatch.putPart(source, name, answer);
@@ -874,15 +1152,23 @@ public final class BuildPipeline {
                     prepare(run);
                     AnalysisReport nrep = StructureAnalyzer.analyze(run.model(), info, aopts);
                     int crit = nrep.count(dev.aibuild.analysis.Severity.CRITICAL), maj = nrep.count(dev.aibuild.analysis.Severity.MAJOR);
-                    int outside = changesOutsideRooms(model, run.model(), rooms);
+                    List<String> outsideCells = new ArrayList<>();
+                    int[] shell = new int[1];
+                    int outside = changesOutsideRooms(model, run.model(), rooms, info, outsideCells, shell);
+                    // a few chandelier chains or lanterns above a room box are not the building
+                    if (shell[0] == 0 && outside <= 12) outside = 0;
+                    QualityVector nq = QualityVector.of(nrep, run);
+                    List<String> worse = nq.regressions(q0);
                     tr.note("interior-run-" + attempt, "ok blocks=" + run.model().nonAirCount() + " critical=" + crit + " major=" + maj
-                            + " outside=" + outside);
-                    if (crit <= crit0 && maj <= maj0 && outside == 0) {
+                            + " outside=" + outside + "\n" + nq.describe());
+                    if (worse.isEmpty() && outside == 0) {
                         return new PartRewrite(name, ScriptPatch.partSource(patch.source(), name), crit, maj);
                     }
                     problem = outside > 0 ? "your statement changes " + outside + " blocks outside the rooms (walls, roofs, floors or"
-                            + " the outside); place blocks only inside the listed room bounds, from the floor layer up"
-                            : "it adds analyzer problems:\n" + clip(nrep.toText(), 1500);
+                            + " the outside), e.g. " + String.join(", ", outsideCells) + "; place blocks only inside the rooms: loop over rooms() and use furnish(room, type),"
+                            + " onWall() and hangFrom() instead of typed coordinates"
+                            : "it makes the build worse: " + String.join(", ", worse) + "\n"
+                            + (run.collisionText().isEmpty() ? "" : "Collisions:\n" + run.collisionText()) + clip(nrep.toText(), 1500);
                 } else {
                     problem = "the script with your statement fails:\n" + run.error().describe();
                 }
@@ -905,7 +1191,7 @@ public final class BuildPipeline {
      */
     private Revision mergeInterior(Job job, Transcript tr, String prompt, ScriptRuntime runtime, ScriptRuntime.Budget budget,
                                    int[] limits, String source, VoxelModel model, AnalysisReport rep, AnalyzerOptions aopts,
-                                   PartRewrite r) {
+                                   PartRewrite r, QualityVector q0) {
         ScriptPatch.Result patch = ScriptPatch.putPart(source, r.name(), r.statement());
         if (!patch.ok()) return null;
         ScriptResult run = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
@@ -915,9 +1201,9 @@ public final class BuildPipeline {
         }
         prepare(run);
         AnalysisReport nrep = StructureAnalyzer.analyze(run.model(), info, aopts);
-        if (nrep.count(dev.aibuild.analysis.Severity.CRITICAL) > rep.count(dev.aibuild.analysis.Severity.CRITICAL)
-                || nrep.count(dev.aibuild.analysis.Severity.MAJOR) > rep.count(dev.aibuild.analysis.Severity.MAJOR)) {
-            tr.note("interior rejected", "adds analyzer problems on the current script:\n" + clip(nrep.toText(), 1500));
+        List<String> worse = QualityVector.of(nrep, run).regressions(q0);
+        if (!worse.isEmpty()) {
+            tr.note("interior rejected", "makes the current build worse: " + String.join(", ", worse));
             return null;
         }
         int before = rep.roomList.stream().mapToInt(AnalysisReport.Room::furniture).sum();
@@ -938,6 +1224,58 @@ public final class BuildPipeline {
     private static boolean isDone(String answer) {
         String a = answer == null ? "" : answer.strip();
         return (a.equals("DONE") || a.startsWith("DONE") && a.length() < 200) && !ScriptPatch.hasHunks(a);
+    }
+
+    /** Makes a kept revision the job's current script and shows it. */
+    private void adopt(Job job, Build build, Staged st, Revision r) {
+        job.script = r.source();
+        job.smoothed = r.result().smoothed();
+        job.scriptParts = r.result().partTable(30);
+        synchronized (job) {
+            job.doorways.clear();
+            job.doorways.addAll(r.result().doorways());
+        }
+        st.model = r.result().model();
+        liveModel(job, build, st.model, "critic");
+        // Revisions can add or drop parts; the page's part legend and the pack's per-cell part indices come from
+        // this list, so a stale one highlights parts that no longer exist.
+        liveParts(job, r.result());
+    }
+
+    /** A stage's quality row and picture in the job log. */
+    private void snapshot(Transcript tr, String stage, VoxelModel model, QualityVector q) {
+        tr.quality(stage, q);
+        if (cfg.get().stageSnapshots) tr.image("stage-" + stage, sheet(model));
+    }
+
+    /**
+     * The finisher's mechanical repairs, appended to the script as its last part and kept when the script still
+     * runs and nothing got worse. Null when there was nothing to repair.
+     */
+    private Revision finish(Job job, Transcript tr, ScriptRuntime runtime, ScriptRuntime.Budget budget, int[] limits,
+                            String source, ScriptResult cur, AnalyzerOptions aopts, QualityVector q) {
+        Finisher.Result f = Finisher.plan(cur.model(), info, cur.collisions(), aopts.expectInterior);
+        if (f.statement() == null) return null;
+        ScriptPatch.Result patch = ScriptPatch.putPart(source, Finisher.PART, f.statement());
+        if (!patch.ok()) {
+            tr.note("finish rejected", patch.error());
+            return null;
+        }
+        ScriptResult run = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
+        if (!run.ok()) {
+            tr.note("finish rejected", run.error().describe());
+            return null;
+        }
+        prepare(run);
+        AnalysisReport nrep = StructureAnalyzer.analyze(run.model(), info, aopts);
+        List<String> worse = QualityVector.of(nrep, run).regressions(q);
+        if (!worse.isEmpty()) {
+            tr.note("finish rejected", String.join(", ", worse) + "\n" + f.notes());
+            return null;
+        }
+        tr.note("finish", f.edits() + " repairs: " + String.join("; ", f.notes()));
+        say(job, "<gray>Доводка: <v0> исправлений (<v1>).</gray>", f.edits(), clip(String.join("; ", f.notes()), 200));
+        return new Revision(patch.source(), run, "finisher");
     }
 
     /**
@@ -963,15 +1301,14 @@ public final class BuildPipeline {
         List<String> rejected = new ArrayList<>();
         Verdict v = new Verdict();
         int accepted = 0;
-        boolean furnish = job.stdlib != dev.aibuild.script.Stdlib.V1 && aopts.expectInterior && !rep.roomList.isEmpty()
+        boolean furnish = job.stdlib != dev.aibuild.script.Stdlib.V1 && aopts.expectInterior
                 && (job.interiors != null ? job.interiors : c.interiors(job.mode.id));
-        var interiorStop = new java.util.concurrent.atomic.AtomicBoolean();
-        long interiorDeadline = System.nanoTime() + c.sculptTimeout * 1_000_000_000L;
-        String interiorBase = source;
-        VoxelModel interiorModel = model;
-        AnalysisReport interiorRep = rep;
-        Future<PartRewrite> interior = !furnish ? null : side.submit(() -> designInterior(job, tr, prompt, system, runtime, budget, limits,
-                interiorBase, interiorModel, interiorRep, aopts, eyes, interiorStop));
+        // the current script's run: its collision ledger is part of the quality every revision is measured against
+        ScriptResult cur = runtime.run(source, job.scriptSeed, null, limits, budget, job.cancelled);
+        if (cur.ok()) prepare(cur);
+        else cur = null;
+        QualityVector q = QualityVector.of(rep, cur);
+        snapshot(tr, "design", model, q);
         if (sculptors > 0 && eyes) {
             Revision sr = sculpt(job, tr, prompt, runtime, budget, limits, system, source, model, rep, aopts, sculptors);
             if (sr != null) {
@@ -979,22 +1316,29 @@ public final class BuildPipeline {
                 source = sr.source();
                 model = sr.result().model();
                 rep = StructureAnalyzer.analyze(model, info, aopts);
-                job.script = source;
-                job.smoothed = sr.result().smoothed();
-                job.scriptParts = sr.result().partTable(30);
-                synchronized (job) {
-                    job.doorways.clear();
-                    job.doorways.addAll(sr.result().doorways());
-                }
-                st.model = model;
-                livePreview(build, model);
+                cur = sr.result();
+                q = QualityVector.of(rep, cur);
+                adopt(job, build, st, sr);
+                snapshot(tr, "sculpt", model, q);
             }
         }
-        if (interior != null) {
+        // the interior designer works on the sculpted build, not on a copy from before the sculptors: rooms they
+        // moved or reshaped are the rooms it furnishes
+        if (furnish && !rep.roomList.isEmpty()) {
+            var interiorStop = new java.util.concurrent.atomic.AtomicBoolean();
+            long interiorDeadline = System.nanoTime() + c.sculptTimeout * 1_000_000_000L;
+            String interiorBase = source;
+            VoxelModel interiorModel = model;
+            AnalysisReport interiorRep = rep;
+            QualityVector interiorQ = q;
+            job.status("ИИ обставляет интерьеры…", 0.62);
+            stageOf(job, "interior", "Interior designer furnishes the rooms");
+            Future<PartRewrite> interior = side.submit(() -> designInterior(job, tr, prompt, system, runtime, budget, limits,
+                    interiorBase, interiorModel, interiorRep, aopts, eyes, interiorQ, interiorStop));
             Revision ir = null;
             try {
                 PartRewrite r = awaitUntil(interior, job, interiorDeadline);
-                if (r != null) ir = mergeInterior(job, tr, prompt, runtime, budget, limits, source, model, rep, aopts, r);
+                if (r != null) ir = mergeInterior(job, tr, prompt, runtime, budget, limits, source, model, rep, aopts, r, q);
             } catch (java.util.concurrent.TimeoutException e) {
                 tr.note("interior timed out", "still working after " + c.sculptTimeout + " s, rooms left as they were");
             } catch (CancelledException e) {
@@ -1009,15 +1353,10 @@ public final class BuildPipeline {
                 source = ir.source();
                 model = ir.result().model();
                 rep = StructureAnalyzer.analyze(model, info, aopts);
-                job.script = source;
-                job.smoothed = ir.result().smoothed();
-                job.scriptParts = ir.result().partTable(30);
-                synchronized (job) {
-                    job.doorways.clear();
-                    job.doorways.addAll(ir.result().doorways());
-                }
-                st.model = model;
-                livePreview(build, model);
+                cur = ir.result();
+                q = QualityVector.of(rep, cur);
+                adopt(job, build, st, ir);
+                snapshot(tr, "interior", model, q);
             }
         }
         // the frozen 2.0 bench variant fixes its rounds and keeps them all
@@ -1030,14 +1369,24 @@ public final class BuildPipeline {
             }
             v.rounds = round;
             job.status("ИИ критикует постройку: раунд " + round + " из " + rounds + "…", 0.5 + 0.4 * (round - 1) / rounds);
+            stageOf(job, "critic", "Critic round " + round + " of " + rounds);
             byte[] img = eyes ? sheet(model) : null;
             byte[] rooms = eyes && aopts.expectInterior && !rep.roomList.isEmpty() ? interiorSheet(model, rep.roomList) : null;
-            String evidence = withAutoNotes(job, rep.toText()) + "\n" + SpatialReport.render(model, info);
+            // what the finisher repairs anyway (lighting, loose attachments, crumbs, decoration in walls) is left out:
+            // the critic spends its round on what only a designer can fix
+            Finisher.Result pending = c.finisher && cur != null ? Finisher.plan(model, info, cur.collisions(), aopts.expectInterior) : null;
+            String evidence = withAutoNotes(job, rep.toText()) + "\n" + SpatialReport.render(model, info)
+                    + "\nQuality now: " + q.describe() + "\n"
+                    + (cur != null && !cur.collisionText().isEmpty() ? "Collisions between parts:\n" + cur.collisionText() : "")
+                    + (cur != null && !cur.warnings().isEmpty() ? "Script warnings (the library already worked around these; fix the"
+                    + " placement so they go away):\n- " + String.join("\n- ", cur.warnings().subList(0, Math.min(10, cur.warnings().size()))) + "\n" : "")
+                    + (pending != null && pending.edits() > 0 ? "Repaired automatically after review, no need to touch: "
+                    + String.join("; ", pending.notes()) + "\n" : "");
             String user = ScriptPrompts.critic(prompt, source, evidence, job.scriptParts, img != null, round, rounds, rejected);
             List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
                     img == null ? ChatMessage.user(user) : ChatMessage.user(user, rooms == null ? List.of(img) : List.of(img, rooms))));
             String effort = round == 1 ? job.mode.effortReview : job.mode.effortReviewFollowup;
-            String answer = callText(job, tr, "critic" + round, effort, msgs);
+            String answer = callText(job, tr, "critic" + round, effort, msgs, codeStream(job, "critic" + round), null);
             v.reviewerCalls++;
             if (isDone(answer)) {
                 tr.note("critic" + round + " done", "the critic found nothing left to improve");
@@ -1053,15 +1402,13 @@ public final class BuildPipeline {
             }
             VoxelModel next = r.result().model();
             AnalysisReport nrep = StructureAnalyzer.analyze(next, info, aopts);
-            int crit = rep.count(dev.aibuild.analysis.Severity.CRITICAL), maj = rep.count(dev.aibuild.analysis.Severity.MAJOR);
-            int ncrit = nrep.count(dev.aibuild.analysis.Severity.CRITICAL), nmaj = nrep.count(dev.aibuild.analysis.Severity.MAJOR);
-            String gate = ncrit > crit ? "added critical analyzer findings" : nmaj > maj ? "added major analyzer findings"
-                    : next.nonAirCount() < model.nonAirCount() / 2 ? "removed more than half of the build" : null;
+            QualityVector nq = QualityVector.of(nrep, r.result());
+            List<String> worse = nq.regressions(q);
+            String gate = worse.isEmpty() ? null : "made it worse: " + String.join(", ", worse);
             if (gate == null && eyes && c.visionJudge) {
                 int pref = judge(job, tr, prompt, sheet(model), sheet(next));
-                boolean fixedDefects = ncrit + nmaj < crit + maj;
                 if (pref < 0) gate = "the judge preferred the previous version";
-                else if (pref == 0 && !fixedDefects) gate = "no visible improvement according to the judge";
+                else if (pref == 0 && !nq.fixesDefects(q)) gate = "no visible improvement according to the judge";
             }
             if (gate != null) {
                 rejected.add(clip(what, 200) + " — rejected: " + gate);
@@ -1073,16 +1420,22 @@ public final class BuildPipeline {
             source = r.source();
             model = next;
             rep = nrep;
-            job.script = source;
-            job.smoothed = r.result().smoothed();
-            job.scriptParts = r.result().partTable(30);
-            synchronized (job) {
-                job.doorways.clear();
-                job.doorways.addAll(r.result().doorways());
-            }
-            st.model = model;
-            livePreview(build, model);
+            cur = r.result();
+            q = nq;
+            adopt(job, build, st, r);
+            snapshot(tr, "critic" + round, model, q);
             say(job, "<gray>Раунд <v0>: улучшено — <white><v1></white></gray>", round, clip(what.replace("DIAGNOSIS:", "").strip(), 180));
+        }
+        if (c.finisher && cur != null) {
+            Revision fr = finish(job, tr, runtime, budget, limits, source, cur, aopts, q);
+            if (fr != null) {
+                source = fr.source();
+                model = fr.result().model();
+                rep = StructureAnalyzer.analyze(model, info, aopts);
+                q = QualityVector.of(rep, fr.result());
+                adopt(job, build, st, fr);
+                snapshot(tr, "finish", model, q);
+            }
         }
         job.scriptModel = model.copy();
         v.summary = Json.str(st.plan, "summary", "");
@@ -1112,6 +1465,7 @@ public final class BuildPipeline {
             return false;
         }
         job.status("ИИ изменяет программу постройки…", 0.1);
+        stageOf(job, "edit", "Rewriting the program");
         AnalyzerOptions aopts = analyzerOptions(plan);
         AnalysisReport rep = StructureAnalyzer.analyze(model, info, aopts);
         boolean eyes = vision(job, tr);
@@ -1119,7 +1473,7 @@ public final class BuildPipeline {
         String user = ScriptPrompts.edit(original, change, cur.script, withAutoNotes(job, rep.toText()), base.partTable(30), img != null);
         List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(ScriptPrompts.system(job.stdlib, c.includeBlockList ? blockList.get() : null)),
                 img == null ? ChatMessage.user(user) : ChatMessage.user(user, List.of(img))));
-        String answer = callText(job, tr, "edit-script", job.mode.effortEdit, msgs);
+        String answer = callText(job, tr, "edit-script", job.mode.effortEdit, msgs, codeStream(job, "edit-script"), null);
         Revision r = revise(job, tr, runtime, budget, cur.seed, limits, cur.script, answer, msgs, "edit-script", job.mode.effortEdit);
         if (r == null) {
             say(job, "<yellow>Правку программы применить не удалось, используем обычную правку.</yellow>");
@@ -1136,7 +1490,8 @@ public final class BuildPipeline {
             job.doorways.clear();
             job.doorways.addAll(r.result().doorways());
         }
-        livePreview(build, next);
+        liveModel(job, build, next, "critic");
+        liveParts(job, r.result());
         Verdict v = new Verdict();
         v.rounds = 1;
         v.summary = clip(r.diagnosis().replace("CHANGE:", "").strip(), 300);
@@ -1210,6 +1565,7 @@ public final class BuildPipeline {
     private Staged designAndCompile(Job job, Transcript tr, String prompt, Build build, Anchor anchor,
                                     boolean isRebuild) throws Exception {
         job.status("ИИ проектирует цельную постройку…", 0.02);
+        stageOf(job, "program", "Writing the build program");
         JsonObject program = callJson(job, tr, "compile", job.mode.effortBuild, Prompts.compile(prompt));
         JsonObject plan = Json.obj(program, "plan");
         if (plan == null || Json.arr(program, "ops").isEmpty()) {
@@ -1237,7 +1593,7 @@ public final class BuildPipeline {
         OpResult result = applyWithRepair(job, tr, new OpExecutor(info).withLimits(st.limits), st.model, program, "compile");
         for (var doorway : result.doorways) job.doorways.add(doorway.followCompiledEntrance(st.model,info));
         tr.note("compile result", result.summary() + "\nresolver: " + postProcess(job, st.model));
-        livePreview(build, st.model);
+        liveModel(job, build, st.model, "stage");
         say(job, "<gray>Программа постройки готова: <white><v0></white>, <v1> блоков. Проверяем конструкцию, фасады и интерьер.</gray>",
                 Json.str(plan, "title", "Постройка"), st.model.nonAirCount());
         return st;
@@ -1303,6 +1659,10 @@ public final class BuildPipeline {
             for (int k = i; k < j; k++) names.add(Json.str(stages.get(k).getAsJsonObject(), "name", label + " " + (k + 1)));
             job.status(j - i == 1 ? label + " " + (i + 1) + "/" + total + ": " + names.get(0)
                     : label + " " + (i + 1) + "–" + j + "/" + total + " параллельно: " + String.join(", ", names), p0 + stageSpan * i);
+            // Staged builds and stepwise edits have no stage rows otherwise: the timeline would sit on one line
+            // for the whole construction while the build visibly grows.
+            stageOf(job, tagPrefix + (i + 1), (j - i == 1 ? names.get(0) : String.join(" + ", names))
+                    + " (" + (i + 1) + "/" + total + ")");
             List<Future<JsonObject>> futures = new ArrayList<>();
             for (int k = i; k < j; k++) {
                 JsonObject st = stages.get(k).getAsJsonObject();
@@ -1326,7 +1686,7 @@ public final class BuildPipeline {
                 tr.note(tagPrefix + (k + 1) + " result", r.summary() + "\nresolver: " + auto);
                 say(job, "<gray>✔ " + label + " <white><v0>/<v1></white> <v2>: <dark_gray><v3></dark_gray> <green>(+<v4> блоков)</green></gray>",
                         k + 1, total, names.get(k - i), clip(Json.str(res, "notes", ""), 120), r.cellsChanged);
-                livePreview(build, model);
+                liveModel(job, build, model, "stage");
             }
             i = j;
         }
@@ -1348,6 +1708,7 @@ public final class BuildPipeline {
     private void runEdit(Job job, Build build, String change) throws Exception {
         PluginConfig c = cfg.get();
         Transcript tr = new Transcript(build.id, c.saveTranscripts);
+        tr.liveJob = job;
         VoxelModel model = sync(() -> {
             VoxelModel m = build.currentModel();
             return m == null ? null : m.copy();
@@ -1425,6 +1786,7 @@ public final class BuildPipeline {
     private EditResult editDirect(Job job, Transcript tr, VoxelModel model, JsonObject plan, String original,
                                   String history, String change, Build build) throws Exception {
         job.status("ИИ анализирует запрос на изменение…", 0.05);
+        stageOf(job, "plan", "Planning the change");
         AnalyzerOptions aopts = analyzerOptions(plan);
         String planText = Json.PRETTY.toJson(planForPrompt(plan));
         JsonObject res = callJson(job, tr, "edit", job.mode.effortEdit, Prompts.edit(original, planText, history, render(model),
@@ -1442,7 +1804,7 @@ public final class BuildPipeline {
         postProcess(job, model);
         say(job, "<gray>✔ Изменение: <white><v0></white> <green>(<v1> блоков изменено)</green></gray>",
                 clip(Json.str(res, "summary", change), 160), r.cellsChanged);
-        livePreview(build, model);
+        liveModel(job, build, model, "stage");
         er.model = model;
         er.plan = plan;
         er.planText = Json.PRETTY.toJson(planForPrompt(plan));
@@ -1470,7 +1832,7 @@ public final class BuildPipeline {
         postProcess(job, model);
         say(job, "<gray>✔ Изменение по плану: <white><v0></white> <green>(<v1> блоков изменено)</green></gray>",
                 clip(Json.str(res, "summary", change), 160), r.cellsChanged);
-        livePreview(build, model);
+        liveModel(job, build, model, "stage");
         er.summary = Json.str(res, "summary", er.summary);
         return er;
     }
@@ -1479,6 +1841,7 @@ public final class BuildPipeline {
     private EditResult planEdit(Job job, Transcript tr, VoxelModel model, JsonObject plan, String original,
                                 String history, String change) throws Exception {
         job.status("ИИ планирует изменение…", 0.04);
+        stageOf(job, "plan", "Planning the change");
         AnalyzerOptions aopts = analyzerOptions(plan);
         String planText = Json.PRETTY.toJson(planForPrompt(plan));
         JsonObject ep = callJson(job, tr, "edit-plan", job.mode.effortEdit, Prompts.editPlan(original, planText, history,
@@ -1766,10 +2129,11 @@ public final class BuildPipeline {
                 v.blockers.remove("review:whole");
             }
             if (!lastScore.isEmpty()) v.score = (int) Math.round(lastScore.values().stream().mapToInt(Integer::intValue).average().orElse(-1));
+            stageOf(job, "review", "Self-review round " + round);
             say(job, "<gray>🔍 Проверка, раунд <white><v0></white>: чек-лист <v1>, экспертов завершило <v2>/<v3>, исправлено блоков <v4>, оценка <v5><v6></gray>",
                     round, cl.progress(), fin, roles.size(), changed, scoreColor(v.score),
                     schedule.assessedCurrentModel() ? "" : " · общая проверка ещё не пройдена");
-            livePreview(build, model);
+            liveModel(job, build, model, "critic");
             tr.note("areview" + round + " state", String.join("\n", history) + "\n\nCHECKLIST\n" + cl.render(null));
             if (context.full && changed==0 && finished.containsValue(false)) {
                 stalled=true;
@@ -1802,6 +2166,8 @@ public final class BuildPipeline {
             VoxelModel roundSnapshot = model.copy();
             job.status("Самопроверка ИИ " + round + "/" + rounds + (parallel ? " (3 эксперта)" : "")
                     + " · проблем найдено автоматически: " + rep.issues.size(), p0 + span * (round - 1));
+            stageOf(job, "review-" + round, "Review " + round + "/" + rounds
+                    + (parallel ? " (3 experts)" : "") + " · " + rep.issues.size() + " issues found");
             String render = render(model);
             String analysis = withAutoNotes(job, rep.toText());
             List<String> tags = new ArrayList<>();
@@ -1871,7 +2237,7 @@ public final class BuildPipeline {
                             ? "<gray>🔍 Проверка <white><v0>/<v1></white>: оценка <v2>, замечаний <v3>, исправлено блоков <v4> — <green>одобрено</green></gray>"
                             : "<gray>🔍 Проверка <white><v0>/<v1></white>: оценка <v2>, замечаний <v3>, исправлено блоков <v4> — <yellow>нужны доработки</yellow></gray>",
                     round, rounds, scoreColor(v.score), issues, changed);
-            livePreview(build, model);
+            liveModel(job, build, model, "critic");
             boolean blocking = StructureAnalyzer.analyze(model, info, aopts).hasBlocking();
             tr.note("review" + round + " verdict", "score=" + v.score + " approved=" + v.approved + " issues=" + issues
                     + " changed=" + changed + " blockingAfter=" + blocking);
@@ -2418,9 +2784,43 @@ public final class BuildPipeline {
     }
 
     /** Chat/console progress message unless the job is quiet (benchmarks). */
+    /**
+     * Announces a clickable link. The URL is attached as a real click event rather than written into the
+     * MiniMessage template, because a placeholder inside a tag argument is not substituted and the player would
+     * see raw markup instead of a link.
+     */
+    private void sayLink(Job job, String template, String url, Object... args) {
+        if (job.quiet) return;
+        Msg.toLink(job.owner, template, url, args);
+        LiveBroadcast lb = live(job);
+        if (lb != LiveBroadcast.NOOP) lb.say(plainOf(template, args) + url);
+        if (job.owner == null) {
+            Bukkit.getScheduler().runTask(plugin, () -> {
+                for (var player : Bukkit.getOnlinePlayers()) {
+                    // no permission filter: the link is already owner-only, this is the console fallback
+                    Msg.sendLink(player, template, url, args);
+                }
+            });
+        }
+    }
+
+    /** The template with {@code <vN>} filled in, for the page, which wants prose and not markup. */
+    private static String plainOf(String template, Object... args) {
+        String plain = template;
+        for (int i = 0; i < args.length; i++) plain = plain.replace("<v" + i + ">", String.valueOf(args[i]));
+        return plain;
+    }
+
     private void say(Job job, String template, Object... args) {
         if (job.quiet) return;
         Msg.to(job.owner, template, args);
+        LiveBroadcast lb = live(job);
+        if (lb != LiveBroadcast.NOOP) {
+            // the page wants the sentence, not the MiniMessage markup the chat layer understands
+            String plain = template;
+            for (int i = 0; i < args.length; i++) plain = plain.replace("<v" + i + ">", String.valueOf(args[i]));
+            lb.say(plain);
+        }
         if (job.owner == null) {
             Bukkit.getScheduler().runTask(plugin, () -> {
                 for (var player : Bukkit.getOnlinePlayers()) {
@@ -2439,14 +2839,18 @@ public final class BuildPipeline {
     private void commit(Job job, Build build, VoxelModel model, String request, Verdict v, Transcript tr) throws Exception {
         checkCancelled(job);
         job.status("Размещение постройки…", 0.97);
+        stageOf(job, "place", "Placing the build");
         if (model.nonAirCount() == 0) throw new IllegalStateException("ИИ не создал ни одного блока");
         VoxelModel fin = model.copy();
         v.finishAnalysis(v.finalReport);
         if (!v.approved) {
+            // One emit here and one after the branch was a duplicate: an unapproved build fell through and
+            // showed the same model twice in the trace. Emit once, for both outcomes.
             writeDraft(build,fin,request,v);
             writeMetrics(job,build,fin,v,tr);
             if (!build.versions.isEmpty()) throw new VerificationRejectedException(v.failureReason());
         }
+        live(job).model(fin, "final");
         PlaceResult pr = placer.place(build, fin, p -> job.progress = 0.97 + p * 0.0003).get(10, TimeUnit.MINUTES);
         checkCancelled(job);
         sync(() -> {
@@ -2578,6 +2982,32 @@ public final class BuildPipeline {
         }
     }
 
+    /**
+     * Shows an intermediate model in the world <b>and</b> on the live page. Everything that used to call
+     * {@link #livePreview} for a job goes through here, so the browser sees exactly what the players see, in
+     * the same order, including placements from critics and sculptors that never touch the world when live
+     * preview is off (the page still shows them: it is about watching the AI, not the world).
+     */
+    private void liveModel(Job job, Build build, VoxelModel model, String why) {
+        if (model == null) return;
+        LiveBroadcast lb = live(job);
+        if (lb != LiveBroadcast.NOOP) lb.model(model, why);
+        if (build != null && cfg.get().livePreview) {
+            try {
+                placer.place(build, model.copy(), p -> { });
+            } catch (Exception e) {
+                plugin.getLogger().log(Level.FINE, "live preview failed", e);
+            }
+        }
+    }
+
+    /** Publishes the named parts of the model being shown. */
+    private void liveParts(Job job, ScriptResult result) {
+        if (result == null) return;
+        LiveBroadcast lb = live(job);
+        if (lb != LiveBroadcast.NOOP) lb.parts(result.parts());
+    }
+
     // =================================================================== helpers: LLM
 
     /** One step less reasoning (used when a call ran out of output budget while still thinking). */
@@ -2620,6 +3050,7 @@ public final class BuildPipeline {
             ChatRequest req = new ChatRequest(c.model, msgs, job.mode.maxTokens, c.temperature, eff, false);
             job.calls.incrementAndGet();
             ChatResult res;
+            StringBuilder think = new StringBuilder();
             try {
                 res = llm.get().chat(req, new StreamListener() {
                     @Override
@@ -2632,6 +3063,15 @@ public final class BuildPipeline {
                     public void onText(CharSequence text) {
                         if (live != null) live.onText(text);
                     }
+
+                    @Override
+                    public void reasoning(String textSoFar) {
+                        // Captured whole for the debug trace: the page only ever shows the tail, but "why did it
+                        // write this" is usually answered by the middle of the reasoning, not the end.
+                        think.setLength(0);
+                        think.append(textSoFar == null ? "" : textSoFar);
+                        if (live != null) live.reasoning(textSoFar);
+                    }
                 }, stop != null ? stop : job.cancelled);
             } catch (LlmException e) {
                 if ("cancelled".equals(e.code()) || job.cancelled.get()) throw new CancelledException();
@@ -2642,10 +3082,31 @@ public final class BuildPipeline {
             job.completionTokens.addAndGet(res.completionTokens());
             job.cachedTokens.addAndGet(res.cachedTokens());
             job.reasoningTokens.addAndGet(res.reasoningTokens());
-            tr.exchange(tag + (attempt > 0 ? "-retry" + attempt : "") + "-" + (eff == null ? "default" : eff), lastUser, res);
+            String stepTag = tag + (attempt > 0 ? "-retry" + attempt : "");
+            tr.exchange(stepTag + "-" + (eff == null ? "default" : eff), lastUser, res);
+            TraceStep.Builder tb = trace(job, TraceStep.Kind.LLM, stepTag)
+                    .title("LLM · " + tag + (attempt > 0 ? " (retry " + attempt + ")" : ""))
+                    .took(res.elapsedMs())
+                    .field("model", c.model)
+                    .field("effort", eff == null ? "default" : eff)
+                    .field("max tokens", job.mode.maxTokens)
+                    .field("attempt", attempt + 1)
+                    .field("usage", "prompt=" + res.promptTokens() + " completion=" + res.completionTokens()
+                            + " cached=" + res.cachedTokens() + " reasoning=" + res.reasoningTokens()
+                            + " finish=" + res.finishReason() + " transport=" + res.transport())
+                    .field("prompt", renderMessages(msgs))
+                    .field("reasoning", res.reasoning() != null ? res.reasoning() : think.toString())
+                    .field("answer", res.content());
             boolean truncated = "length".equals(res.finishReason());
             boolean empty = res.content() == null || res.content().isBlank();
-            if (!empty && !truncated) return res.content();
+            if (!empty && !truncated) {
+                tb.status(TraceStep.Status.OK).summary(summarise(res.content(), "chars", res.elapsedMs()));
+                traceDone(job, tb);
+                return res.content();
+            }
+            tb.status(truncated ? TraceStep.Status.FAILED : TraceStep.Status.FAILED)
+                    .summary(truncated ? "output truncated at " + job.mode.maxTokens + " tokens" : "empty answer");
+            traceDone(job, tb);
             lastErr = truncated ? "output truncated" : "empty answer";
             if (truncated && empty && !"off".equals(eff)) {
                 String lower = lowerEffort(eff);
@@ -2684,10 +3145,22 @@ public final class BuildPipeline {
             ChatRequest req = new ChatRequest(c.model, msgs, job.mode.maxTokens, c.temperature, eff, true);
             job.calls.incrementAndGet();
             ChatResult res;
+            StringBuilder think = new StringBuilder();
             try {
-                res = llm.get().chat(req, (cc, rc) -> {
-                    job.streamChars = cc;
-                    job.reasoningChars = rc;
+                res = llm.get().chat(req, new StreamListener() {
+                    @Override
+                    public void onProgress(int cc, int rc) {
+                        job.streamChars = cc;
+                        job.reasoningChars = rc;
+                    }
+
+                    @Override
+                    public void reasoning(String textSoFar) {
+                        think.setLength(0);
+                        think.append(textSoFar == null ? "" : textSoFar);
+                        LiveBroadcast lb = live(job);
+                        if (lb != LiveBroadcast.NOOP) lb.reasoning(textSoFar);
+                    }
                 }, job.cancelled);
             } catch (LlmException e) {
                 if ("cancelled".equals(e.code()) || job.cancelled.get()) throw new CancelledException();
@@ -2706,18 +3179,41 @@ public final class BuildPipeline {
             job.completionTokens.addAndGet(res.completionTokens());
             job.cachedTokens.addAndGet(res.cachedTokens());
             job.reasoningTokens.addAndGet(res.reasoningTokens());
-            tr.exchange(tag + (attempt > 0 ? "-retry" + attempt : "") + "-" + (eff == null ? "default" : eff), userMsg, res);
+            String stepTag = tag + (attempt > 0 ? "-retry" + attempt : "");
+            tr.exchange(stepTag + "-" + (eff == null ? "default" : eff), userMsg, res);
+            TraceStep.Builder tb = trace(job, TraceStep.Kind.LLM, stepTag)
+                    .title("LLM · " + tag + (attempt > 0 ? " (retry " + attempt + ")" : ""))
+                    .took(res.elapsedMs())
+                    .field("model", c.model)
+                    .field("effort", eff == null ? "default" : eff)
+                    .field("max tokens", job.mode.maxTokens)
+                    .field("attempt", attempt + 1)
+                    .field("usage", "prompt=" + res.promptTokens() + " completion=" + res.completionTokens()
+                            + " cached=" + res.cachedTokens() + " reasoning=" + res.reasoningTokens()
+                            + " finish=" + res.finishReason() + " transport=" + res.transport())
+                    .field("prompt", renderMessages(msgs))
+                    .field("reasoning", res.reasoning() != null ? res.reasoning() : think.toString())
+                    .field("answer", res.content());
             boolean truncated = "length".equals(res.finishReason());
             boolean empty = res.content() == null || res.content().isBlank();
             if (!empty && !truncated) {
                 try {
                     Json.Extracted ex = Json.extract(res.content());
                     if (ex.repaired()) plugin.getLogger().info("[" + tag + "] JSON repaired: " + ex.note() + " (finish=" + res.finishReason() + ")");
+                    // A repair means the model emitted something that only parses after fixing. That is a defect
+                    // worth seeing in the trace even though the build continues.
+                    if (ex.repaired()) tb.field("json repair", ex.note());
                     JsonElement el = ex.value();
-                    if (el.isJsonObject()) return el.getAsJsonObject();
+                    if (el.isJsonObject()) {
+                        tb.status(TraceStep.Status.OK).summary(summarise(res.content(), "chars", res.elapsedMs()));
+                        traceDone(job, tb);
+                        return el.getAsJsonObject();
+                    }
                     if (el.isJsonArray()) {
                         JsonObject o = new JsonObject();
                         o.add("ops", el);
+                        tb.status(TraceStep.Status.OK).summary(summarise(res.content(), "chars", res.elapsedMs()));
+                        traceDone(job, tb);
                         return o;
                     }
                     lastErr = "response is not a JSON object";
@@ -2738,6 +3234,8 @@ public final class BuildPipeline {
                 eff = lower;
                 continue;
             }
+            tb.status(TraceStep.Status.FAILED).summary("invalid JSON: " + lastErr);
+            traceDone(job, tb);
             plugin.getLogger().warning("[" + tag + "] invalid JSON from model (" + lastErr + "), finish=" + res.finishReason() + ", retrying");
             if (attempt >= 1) break;
             msgs.add(ChatMessage.assistant(clip(res.content(), 4000)));
@@ -2767,8 +3265,28 @@ public final class BuildPipeline {
             JsonObject fix = callJson(job, tr, tag + "-repair", job.mode.effortBuild, Prompts.repair(failed.toString()));
             OpResult r2 = exec.apply(model, fix.has("ops") ? fix.get("ops") : fix);
             tr.note(tag + "-repair result", r2.summary());
+            traceDone(job, trace(job, TraceStep.Kind.OPS, tag + "-repair")
+                    .title("Op repair · " + tag)
+                    .ok(!r2.hasErrors())
+                    .summary(r2.summary())
+                    .field("ops sent", failed.toString())
+                    .field("result", r2.summary())
+                    .field("errors", String.join("\n", r2.errors)));
             r.merge(r2);
         }
+        // The batch as applied, including the per-op errors: an op that silently failed to place blocks is the
+        // single most common reason a build looks wrong while the transcript says everything succeeded.
+        traceDone(job, trace(job, TraceStep.Kind.OPS, tag)
+                .title("Ops · " + tag)
+                .ok(!r.hasErrors())
+                .summary(r.opsTotal() + " ops · " + r.cellsChanged() + " cells changed"
+                        + (r.opsFailed > 0 ? " · " + r.opsFailed + " failed" : ""))
+                .field("ops total", r.opsTotal())
+                .field("ops ok", r.opsOk())
+                .field("ops failed", r.opsFailed())
+                .field("cells changed", r.cellsChanged())
+                .field("errors", String.join("\n", r.errors))
+                .field("summary", r.summary()));
         return r;
     }
 
@@ -2967,6 +3485,8 @@ public final class BuildPipeline {
         private final File dir;
         private final boolean enabled;
         private final AtomicInteger seq = new AtomicInteger();
+        /** The job that owns this transcript; set right after construction, read by {@link #note}. */
+        volatile Job liveJob;
 
         Transcript(String buildId, boolean enabled) {
             this.enabled = enabled;
@@ -2985,8 +3505,29 @@ public final class BuildPipeline {
         }
 
         void note(String tag, String text) {
+            live(liveJob).note(tag, text);
             if (!enabled) return;
             write(String.format("%02d-%s.txt", seq.incrementAndGet(), tag.replace(' ', '_')), text);
+        }
+
+        void image(String tag, byte[] png) {
+            if (!enabled || png == null) return;
+            try {
+                Files.write(new File(dir, String.format("%02d-%s.png", seq.incrementAndGet(), tag)).toPath(), png);
+            } catch (IOException e) {
+                plugin.getLogger().log(Level.FINE, "transcript write failed", e);
+            }
+        }
+
+        /** One row per accepted stage in quality.txt, so a run shows where the build got better or worse. */
+        void quality(String stage, QualityVector q) {
+            if (!enabled) return;
+            try {
+                Files.writeString(new File(dir, "quality.txt").toPath(), stage + ": " + q.describe() + "\n", StandardCharsets.UTF_8,
+                        java.nio.file.StandardOpenOption.CREATE, java.nio.file.StandardOpenOption.APPEND);
+            } catch (IOException e) {
+                plugin.getLogger().log(Level.FINE, "transcript write failed", e);
+            }
         }
 
         private void write(String name, String content) {

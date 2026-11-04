@@ -57,7 +57,8 @@ class BuildRequirementsTest {
         new OpExecutor(info).apply(model,JsonParser.parseString("""
                 {"op":"fill","from":[0,0,0],"to":[4,4,4],"block":"stone"}
                 """));
-        model.set(2,1,2,BlockSpec.AIR); model.set(2,2,2,BlockSpec.AIR);
+        // a 2 x 2 chamber, two high: a niche of one cell would only be a dark pocket
+        for (int x = 1; x <= 2; x++) for (int z = 1; z <= 2; z++) for (int y = 1; y <= 2; y++) model.set(x,y,z,BlockSpec.AIR);
         var interior = StructureAnalyzer.analyze(model,info,new AnalyzerOptions(true));
         var sculpture = StructureAnalyzer.analyze(model,info,new AnalyzerOptions(false));
         assertTrue(interior.hasCode("dark_interior"));

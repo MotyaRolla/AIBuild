@@ -107,6 +107,14 @@ public final class BukkitBlockInfo implements BlockInfo {
         name = ALIASES.getOrDefault(name, name);
         Material m = Material.getMaterial(name.toUpperCase(Locale.ROOT));
         if (m == null || !m.isBlock() || m.isLegacy()) {
+            // deepslate_brick, deepslate_tile, nether_brick: the singular names the model keeps writing for the block
+            Material plural = Material.getMaterial(name.toUpperCase(Locale.ROOT) + "S");
+            if (plural != null && plural.isBlock() && !plural.isLegacy()) {
+                m = plural;
+                name = name + "s";
+            }
+        }
+        if (m == null || !m.isBlock() || m.isLegacy()) {
             throw new IllegalArgumentException("unknown block '" + s.name() + "'" + suggestion(name));
         }
         Map<String, String> def = defaultsOf(m);

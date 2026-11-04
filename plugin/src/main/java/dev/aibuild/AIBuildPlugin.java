@@ -9,6 +9,9 @@ import dev.aibuild.build.BuildStore;
 import dev.aibuild.bukkit.BukkitBlockInfo;
 import dev.aibuild.command.AIBuildCommand;
 import dev.aibuild.config.PluginConfig;
+import dev.aibuild.live.LiveHttpConfig;
+import dev.aibuild.live.LiveSession;
+import dev.aibuild.live.LiveViewServer;
 import dev.aibuild.pipeline.BuildPipeline;
 import dev.aibuild.pipeline.Job;
 import dev.aibuild.util.Msg;
@@ -57,6 +60,10 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
     private volatile String cliVersion;
     private NamespacedKey wandKey;
 
+    /** One-time live-view links and their HTTP server, null while the feature is off. */
+    private LiveSession.Registry liveLinks;
+    private LiveViewServer liveServer;
+
     private final Set<UUID> chatMode = ConcurrentHashMap.newKeySet();
     /** Chosen thinking mode per player ("console" key for the console), persisted in player-modes.json. */
     private final Map<String, String> playerModes = new ConcurrentHashMap<>();
@@ -78,6 +85,7 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
         store.loadAll();
         placer = new WorldPlacer(this, config.blocksPerTick, config.foundationBlock, config.maxFoundationDepth);
         pipeline = new BuildPipeline(this, store, placer, blockInfo, () -> llm, () -> config, () -> blockList);
+        startLiveView(config);
         command = new AIBuildCommand(this);
         registerCommand("aibuild", "AI build generation and editing", List.of("aib", "ai"), command);
         getServer().getPluginManager().registerEvents(this, this);
@@ -103,8 +111,73 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
         });
     }
 
+    /**
+     * Starts the one-time live view: a loopback HTTP server that serves the live page, an event stream and the
+     * projected model of each running job, plus the registry that hands out links.
+     *
+     * <p>The server binds loopback only. Links are announced to the owner only when {@code public-url} is set,
+     * because a link nobody outside the machine can open is worse than no link. Nothing here is fatal: if the
+     * port is taken the plugin logs it and every other feature keeps working.</p>
+     */
+    private void startLiveView(PluginConfig c) {
+        if (!c.liveView) {
+            getLogger().info("Live view off (generation.live-view.enabled)");
+            return;
+        }
+        LiveSession.Registry registry = new LiveSession.Registry(c.liveExpireMinutes, getLogger());
+        try {
+            LiveHttpConfig http = new LiveHttpConfig(c.liveBindHost, c.livePort, c.livePublicUrl, c.liveMaxViewers, false);
+            LiveViewServer server = new LiveViewServer(http, registry::get, token -> {
+                // the viewer's stop button cancels the running job; a finished or unknown link returns false
+                LiveSession s = registry.get(token);
+                if (s == null || s.finished()) return false;
+                Job j = pipeline.jobFor(s.buildId());
+                if (j == null) return false;
+                getLogger().info("Live viewer requested cancellation of build " + s.buildId());
+                j.cancelled.set(true);
+                return true;
+            }, getLogger());
+            server.start();
+            liveServer = server;
+            liveLinks = registry;
+            pipeline.liveLinks(registry);
+            pipeline.liveUrl((session) -> server.urlForUser(session.token()));
+            pipeline.liveStatus(this::liveStatus);
+            Bukkit.getScheduler().runTaskTimerAsynchronously(this, registry::sweep, 20L * 60, 20L * 60);
+            getLogger().info("Live view listening on " + server.publicBaseUrl() + "/live/<token>/"
+                    + (server.isLoopbackBind() && c.livePublicUrl.isBlank()
+                       ? " — loopback only: set generation.live-view.public-url to give players clickable links" : ""));
+        } catch (Exception e) {
+            getLogger().warning("Live view server could not start (" + e.getMessage() + "); builds run without a live link");
+        }
+    }
+
+    /** One line for {@code /aib watch}. */
+    private String liveStatus() {
+        if (liveServer == null) return "live view off";
+        return liveServer.publicBaseUrl() + " · " + liveLinks.size() + " link(s)";
+    }
+
+    /** The live server, null when off (used by {@code /aib watch}). */
+    public LiveViewServer liveServer() {
+        return liveServer;
+    }
+
+    /** The live-link registry, null when off. */
+    public LiveSession.Registry liveLinks() {
+        return liveLinks;
+    }
+
     @Override
     public void onDisable() {
+        if (liveServer != null) {
+            liveServer.close();
+            liveServer = null;
+        }
+        if (liveLinks != null) {
+            liveLinks.closeAll();
+            liveLinks = null;
+        }
         if (pipeline != null) pipeline.shutdown();
         for (BossBar b : bars.values()) for (Player p : Bukkit.getOnlinePlayers()) p.hideBossBar(b);
         if (store != null) store.shutdown();

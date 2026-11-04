@@ -27,6 +27,13 @@ public interface StreamListener {
     default void onText(CharSequence contentSoFar) {
     }
 
+    /**
+     * Receives the reasoning text so far while the model is still thinking (much slower than {@link #onText}:
+     * at most once a second). Not every transport exposes reasoning, and it may stop arriving at any time.
+     */
+    default void reasoning(String textSoFar) {
+    }
+
     /** A listener that ignores all progress. */
     StreamListener NOOP = (contentChars, reasoningChars) -> {
     };
