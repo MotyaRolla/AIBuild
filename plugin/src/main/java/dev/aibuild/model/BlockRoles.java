@@ -38,4 +38,18 @@ public final class BlockRoles {
                 || n.equals("ladder") || n.equals("scaffolding") || n.equals("water") || n.equals("lava")) return false;
         return true;
     }
+
+    /**
+     * Whether writing {@code now} over {@code was} breaks a part's shell or way through: a wall, floor, window or
+     * door emptied or covered with loose decoration, or a stair, ladder or door replaced by something else. Wood
+     * and leaves giving way (a tree moved aside) and one wall block replacing another are not breakage.
+     */
+    public static boolean breaks(BlockSpec was, BlockSpec now, BlockInfo info) {
+        if (was == null || was.isAir()) return false;
+        if (access(was)) return !access(now);
+        if (!structural(was, info)) return false;
+        String n = was.name();
+        if (n.endsWith("_leaves") || n.endsWith("_log") || n.endsWith("_wood")) return false;
+        return now == null || now.isAir() || decor(now, info);
+    }
 }

@@ -19,6 +19,9 @@ generation:
   default-mode: standard
   # script   = the AI writes one JavaScript build program (smooth shapes, materials, kits; see stdlib/api-card.md)
   #            that runs in a sandbox; errors go back to the AI as a traceback (default)
+  # studio   = one session in which the AI runs its own build loop: it writes the script, sees renders and the
+  #            analysis after every run, looks wherever it wants, reads the builder's handbook, can hand parts to
+  #            helpers, and says itself when the build is done. Nothing it makes is rejected (see studio: below)
   # compiled = one JSON op program (1.x behaviour); staged = plan + separate construction calls
   create-strategy: script
   auto-orient: true          # auto-correct stair facing / slab type from context (roof slopes, wall-backed, chairs)
@@ -113,11 +116,43 @@ script:
     light: 1
     standard: 1
     extra: 1
+  # self-check: after a sculptor's or the interior designer's work passes the checks, it sees what it built
+  # (close-ups before and after, the blocks the runtime skipped, the quality numbers) and corrects it once or
+  # answers KEEP; a correction that breaks something is dropped and the checked version stays (1 = on, 0 = off)
+  self-check:
+    fast: 0
+    light: 0
+    standard: 1
+    extra: 1
+  # in standard and extra, the create prompt asks the model to settle the design in its thinking and write the
+  # script only once, in the answer (live builds drafted the whole script in their reasoning, then wrote it again)
+  write-once: true
   sculpt-timeout: 900        # seconds for all sculptors; a slower one is stopped and its part stays as it was
   # after the last review step, code repairs what the analyzer points at cell by cell: decoration written into
   # walls, removed stairs, unsupported lights and torches, furniture in doorways, floating crumbs, dark rooms.
   # The repairs are appended to the script as part('finish'), so it still reproduces the build.
   finisher: true
+
+# The studio (generation.create-strategy: studio, or the "studio" bench variant). The plugin executes and reports;
+# the AI decides everything else. Only these limits remain:
+studio:
+  # wall clock of a new build in minutes; the AI sees the time left in every reply and ships when it is done
+  # (or the current version ships when the time is up)
+  minutes:
+    fast: 8
+    light: 15
+    standard: 30
+    extra: 60
+  # parallel sessions of a new build; with 2+ the blind pairwise judge picks one (no extra wall time)
+  sessions:
+    fast: 1
+    light: 1
+    standard: 1
+    extra: 2
+  edit-minutes: 15           # an /aib edit session on a studio build
+  max-turns: 40              # a fuse against a session that loops, not a budget
+  delegate: true             # the AI may hand parts to helper sessions running in parallel
+  helper-turns: 12           # turns of one helper session
 
 vision:
   enabled: true              # send renders to the AI (checked once per session with a test image)
@@ -131,7 +166,7 @@ vision:
 #   review          first self-review round (3 parallel experts: structure / exterior / interior)
 #   review-followup later fix-up rounds     edit    change requests (/aib edit, chat mode)
 # verify-rounds: max self-review rounds (stops early once all reviewers approve and checks pass)
-# max-tokens: output budget per call incl. thinking (model limit 393216). If a call spends the whole budget
+# max-tokens: output budget per call incl. thinking (393216 is the model limit and the most allowed). If a call spends the whole budget
 #   thinking, it is retried automatically with one level less effort.
 modes:
   fast:
@@ -166,7 +201,7 @@ modes:
     edit: high
     verify-rounds: 3
     edit-verify-rounds: 1
-    max-tokens: 300000
+    max-tokens: 393216
     parallel-review: false
   extra:
     title: "Экстра-думание"
@@ -178,7 +213,7 @@ modes:
     edit: high
     verify-rounds: 3
     edit-verify-rounds: 2
-    max-tokens: 300000
+    max-tokens: 393216
 
 bench:
   judge-effort: high         # reasoning of the blind judge in /aib bench

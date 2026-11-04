@@ -1,4 +1,7 @@
 # BUILD SCRIPT API (JavaScript; all coordinates are integer blocks, ranges inclusive; m = block or material)
+Small data mistakes do not stop the script: an unknown property is dropped, a shape a material lacks falls back to
+the nearest (polished_andesite_wall -> andesite_wall) or the full block, a write with a NaN coordinate is skipped.
+Each such fix is listed in the warnings; check them, because the build then differs from what you wrote.
 Dialect: Rhino ES2016-ish. let/const/arrow functions/template strings/destructuring are fine. NOT supported:
 `class`, spread arguments in calls f(...xs) (use f.apply(null, xs)), `Date`. Math.random()/rng() are seeded.
 
@@ -10,6 +13,8 @@ at(x,y,z, fn)                    same as withT({at:[x,y,z]}, fn)
 sym('x'|'z', center, (mirrored) => {...})   draw once and mirrored across the plane axis=center (stairs/doors flip correctly)
 around(n, cx, cz, (i) => {...}, startDeg)    n copies rotated around the vertical axis through (cx, cz); draw relative to it
 rng() rand(a,b) randInt(a,b) pick(arr) chance(p) noise(x,y,z,scale) lerp clamp range(a,b,step) log(...)
+option('roof', ['gable','hipped','mansard'])   a design choice left open: returns the decided choice, else the first.
+  The studio builds every choice of a new option and shows them side by side; decide({roof:'hipped'}) fixes one.
 
 ## Blocks
 block(x,y,z,m)   box(x1,y1,z1,x2,y2,z2,m,{hollow|walls|outline})   clear(x1,y1,z1,x2,y2,z2 | x,y,z)
@@ -20,6 +25,12 @@ op({op:'roof'|'staircase'|'trim'|..., ...})   legacy JSON operation (same fields
 rooms() -> [{x1,z1,x2,z2, y, area, furniture, light}]   enclosed rooms a door/stair/ladder reaches, largest first;
     y = the layer you stand in, x1..z2 = free floor inside the walls. Call it after the shells are built.
 partBox(name) -> [x1,y1,z1,x2,y2,z2] | null   isAir(x,y,z)   isSolid(x,y,z)   surface(x,z) -> top solid y
+note('text')   one line of intent for the current part: its signature details and the space it keeps clear
+mark('name', x,y,z, note?) | mark('name', [x1,y1,z1,x2,y2,z2], note?)   names a key point or box of the part
+anchor('name') -> {x,y,z,note} | {x1,y1,z1,x2,y2,z2,note} | null   reads a mark back, or a kit's own anchor:
+    'house.body' / 'house.door' (volume), 'keep/tower.tower', 'walls/wall.wall', 'gate.door' (door()); the BUILD
+    SHEET lists them. Place details relative to anchors instead of retyping numbers.
+confine('part', rule)   set by the pipeline at the top of a script; do not write or remove it.
 onWall(x,y,z, face, m)   puts a wall-mounted block (banner, torch, sign) on the real wall face near the cell, facing
     face; never replaces a block; returns the cell or null.   hangFrom(x,y,z, m, chain)   hangs a light under the
     real ceiling above.

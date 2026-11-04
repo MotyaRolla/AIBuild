@@ -6,7 +6,7 @@
 
     <groupId>dev.aibuild</groupId>
     <artifactId>AIBuild</artifactId>
-    <version>3.2.1</version>
+    <version>4.0.0</version>
     <packaging>jar</packaging>
     <name>AIBuild</name>
     <description>AI-powered structure generation and editing (DeepSeek V4.1 Flash via Command Code)</description>

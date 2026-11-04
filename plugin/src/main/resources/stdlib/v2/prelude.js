@@ -35,6 +35,63 @@ function part(name, fn) {
     __part(name);
     try { return fn(); } finally { __endpart(); }
 }
+/**
+ * Set by the pipeline at the top of a script, never needed in your own code: the named part may not break other
+ * parts' blocks ('others') or writes only inside the rooms standing when it starts ('rooms'). Out-of-scope writes
+ * are skipped.
+ */
+function confine(name, rule) { __confine(name, rule); }
+
+// ---- the build sheet: what this part is for and where its key points are, for every later stage to read
+/**
+ * One line of intent for the current part, at most 200 characters: its signature details and the space it keeps
+ * clear ("spiral stair in the SE corner; keep 3x3 clear"). Reviewers and later passes read it in the build sheet.
+ */
+function note(text) { __note(String(text)); }
+/**
+ * Names a point mark(name, x, y, z, note?) or a box mark(name, [x1, y1, z1, x2, y2, z2], note?) of the current
+ * part (local coordinates, stored in world coordinates). Another part reads it back with anchor(name).
+ */
+function mark(name, a, b, c, d) {
+    if (Array.isArray(a)) return __mark(String(name), a, b === undefined ? '' : String(b), false);
+    // a point or box object, as anchor(), partBox() and the kits return them
+    if (a !== null && typeof a === 'object') {
+        var note = b === undefined ? '' : String(b);
+        if (a.x1 !== undefined) return __mark(String(name), [a.x1, a.y1, a.z1, a.x2, a.y2, a.z2], note, false);
+        if (a.x !== undefined) return __mark(String(name), [a.x, a.y, a.z], note, false);
+    }
+    return __mark(String(name), [a, b, c], d === undefined ? '' : String(d), false);
+}
+// ---- design options: try alternatives side by side, then keep one
+var __picks = {};
+/** Fixes choices of option() by name: decide({roof: 'hipped', bays: 5}). The studio writes this line for PICK. */
+function decide(o) { for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) __picks[k] = o[k]; }
+/**
+ * A design choice left open: option('roof', ['gable', 'hipped', 'mansard']) returns the picked choice, or the
+ * first one. In the studio every choice of a new option is built and shown side by side from the same camera, so
+ * you compare instead of guess; PICK roof=hipped keeps one. Choices are strings, numbers or booleans.
+ */
+function option(name, choices) {
+    if (typeof name !== 'string' || !Array.isArray(choices) || choices.length === 0) {
+        throw new Error("option(name, [choice, ...]): give a name and a non-empty list of choices");
+    }
+    var keys = choices.map(function (c) { return JSON.stringify(c); });
+    var i = 0, fixed = false;
+    if (Object.prototype.hasOwnProperty.call(__picks, name)) {
+        fixed = true;
+        var j = keys.indexOf(JSON.stringify(__picks[name]));
+        if (j >= 0) i = j;
+        else __warn("decide: option '" + name + "' has no choice " + JSON.stringify(__picks[name]) + "; the first one was used");
+    }
+    __option(name, JSON.stringify(keys), i, fixed);
+    return choices[i];
+}
+/**
+ * A named anchor of the build so far, in world coordinates: a mark(), or one a kit set ('keep.body', 'keep.door',
+ * 'keep/tower.tower', 'walls/wall.wall'; the build sheet lists them). A point is {x, y, z}; a box is
+ * {x1, y1, z1, x2, y2, z2}; both carry note. Null when there is no such anchor.
+ */
+function anchor(name) { return __anchor(String(name)); }
 
 function _frameOps(t) {
     var ops = [];
@@ -261,7 +318,11 @@ function _base(m) { return typeof m === 'string' ? m.split('[')[0] : m; }
 function stair(m, facing, half) {
     var b = _base(m);
     var name = typeof b === 'string' && /_stairs$/.test(b) ? b : stairsOf(m);
-    if (!name) throw new Error('no stairs exist for ' + m);
+    if (!name) {
+        // a block without stairs (hay_block, glass...): the full block keeps the shape instead of stopping the script
+        __warn('auto-corrected: ' + m + ' has no stairs, the full block was used');
+        return m;
+    }
     return name + '[facing=' + facing + ',half=' + (half || 'bottom') + ']';
 }
 /** Stair state when the block has stairs, else the block itself (furniture trims in any material). */
@@ -273,7 +334,10 @@ function _stairOr(m, facing, half) {
 function slab(m, type) {
     var b = _base(m);
     var name = typeof b === 'string' && /_slab$/.test(b) ? b : slabOf(m);
-    if (!name) throw new Error('no slab exists for ' + m);
+    if (!name) {
+        __warn('auto-corrected: ' + m + ' has no slab, the full block was used');
+        return m;
+    }
     return name + '[type=' + (type || 'bottom') + ']';
 }
 
@@ -633,6 +697,7 @@ function door(x, y, z, face, opts) {
     }
     if (opts.lamp) block(x - side[0] + dir[0] * (opts.frame ? 2 : 1), y + 2, z - side[1] + dir[1] * (opts.frame ? 2 : 1),
         (opts.lamp === true ? 'lantern' : opts.lamp));
+    __mark('door', [x, y, z], (n === 2 ? 'double door' : 'door') + ' facing ' + face, true);
 }
 
 /** Column from (x, y, z) up h blocks. opts: r (0 = square 1x1, >= 1 round), m, base and capital (block; stairs ring). */
@@ -924,6 +989,8 @@ function _volume(x1, z1, x2, z2, y, opts) {
             });
         }
     }
+    __mark('body', [X0, y, Z0, X1, wallTop, Z1], 'floors y=' + floorYs.join(',') + '; roof from y=' + (wallTop + 1), true);
+    if (doorCell) __mark('door', doorCell, 'main door', true);
     return { x0: X0, z0: Z0, x1: X1, z1: Z1, top: wallTop, roofY: wallTop + 1, floors: floorYs, door: doorCell, rooms: rooms };
 }
 
@@ -1073,6 +1140,7 @@ function tower(cx, y, cz, r, h, opts) {
             roof(cx - r - 1, cz - r - 1, cx + r + 1, cz + r + 1, top + 1, ro);
         }
         lamp(cx, top - 2, cz, { hanging: true });
+        __mark('tower', [cx - r, y, cz - r, cx + r, top, cz + r], 'centre ' + cx + ',' + cz + ', r=' + r + ', top floor y=' + top, true);
     });
 }
 
@@ -1119,6 +1187,9 @@ function curtainWall(points, y, h, opts) {
                 for (var o2 = -half; o2 <= half; o2++) block(Math.round(px + nx * o2), y + h - 1, Math.round(pz + nz * o2), walkM);
             }
         }
+        var xs = points.map(function (q) { return q[0]; }), zs = points.map(function (q) { return q[1]; });
+        __mark('wall', [Math.min.apply(null, xs) - half, y, Math.min.apply(null, zs) - half, Math.max.apply(null, xs) + half, y + h, Math.max.apply(null, zs) + half],
+            'thickness ' + t + ', walkway y=' + (y + h) + ', path ' + points.map(function (q) { return q[0] + ',' + q[1]; }).join(' > '), true);
     });
 }
 

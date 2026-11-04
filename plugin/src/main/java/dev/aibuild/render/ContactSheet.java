@@ -85,6 +85,95 @@ public final class ContactSheet {
         return png(sheet);
     }
 
+    /** One view for {@link #shots}: a camera, a label, and an optional height above which blocks are removed. */
+    public record Shot(String label, VoxelRaster.Camera camera, Integer clipY) {
+    }
+
+    /** Tile size of a sheet of {@code n} views fitted into {@code maxSide}: {width, height, cols}. */
+    public static int[] tileSize(int n, int maxSide) {
+        int cols = n == 1 ? 1 : 2;
+        int tw = maxSide / cols, th = n == 1 ? maxSide * 3 / 4 : tw * 3 / 4;
+        return new int[]{tw, th, cols};
+    }
+
+    /**
+     * Up to four free views (2 x 2 tiles), each from its own camera: what the model asked to look at (eye level
+     * from where a player stands, a part from a chosen side, the plan from above). Cameras must be made with
+     * {@link #tileSize} for the same count.
+     */
+    public static byte[] shots(VoxelModel model, BlockInfo info, java.util.List<Shot> shots, int maxSide) {
+        int n = Math.min(4, shots.size());
+        if (n == 0) return of(model, info, maxSide);
+        int[] t = tileSize(n, maxSide);
+        int tw = t[0], th = t[1], cols = t[2], rows = n <= 2 ? 1 : 2;
+        BufferedImage sheet = new BufferedImage(tw * cols, th * rows, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = sheet.createGraphics();
+        try {
+            for (int i = 0; i < n; i++) {
+                Shot s = shots.get(i);
+                VoxelRaster.Options o = s.clipY() == null ? VoxelRaster.Options.defaults() : VoxelRaster.Options.defaults().clip(s.clipY());
+                tile(g, VoxelRaster.render(model, info, s.camera(), o), (i % cols) * tw, (i / cols) * th, s.label());
+            }
+        } finally {
+            g.dispose();
+        }
+        return png(sheet);
+    }
+
+    /**
+     * Alternatives of one design choice side by side: each model from the same camera on {@code box}, up to six
+     * tiles, so the only difference between tiles is the choice.
+     */
+    public static byte[] compare(java.util.List<VoxelModel> models, java.util.List<String> labels, BlockInfo info, int[] box, int maxSide) {
+        int n = Math.min(6, models.size());
+        int cols = n <= 2 ? n : n <= 4 ? 2 : 3, rows = (n + cols - 1) / cols;
+        int tw = maxSide / cols, th = tw * 3 / 4;
+        BufferedImage sheet = new BufferedImage(tw * cols, th * rows, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = sheet.createGraphics();
+        try {
+            VoxelRaster.Camera cam = VoxelRaster.closeup(box, 0, tw, th);
+            for (int i = 0; i < n; i++) {
+                tile(g, VoxelRaster.render(models.get(i), info, cam, VoxelRaster.Options.defaults()), (i % cols) * tw, (i / cols) * th,
+                        labels.get(i));
+            }
+        } finally {
+            g.dispose();
+        }
+        return png(sheet);
+    }
+
+    /**
+     * Two builds for a blind comparison: A on the top row, B below, each from the south-east and south-west corners
+     * and at eye level from the front, all with the same cameras.
+     */
+    public static byte[] pair(VoxelModel a, VoxelModel b, BlockInfo info, int maxSide) {
+        int[] ba = a.solidBounds(), bb = b.solidBounds();
+        int[] u = ba == null ? bb : bb == null ? ba : new int[]{Math.min(ba[0], bb[0]), Math.min(ba[1], bb[1]), Math.min(ba[2], bb[2]),
+                Math.max(ba[3], bb[3]), Math.max(ba[4], bb[4]), Math.max(ba[5], bb[5])};
+        int tw = Math.max(160, maxSide / 3), th = Math.max(120, tw * 3 / 4);
+        BufferedImage sheet = new BufferedImage(tw * 3, th * 2, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = sheet.createGraphics();
+        try {
+            if (u == null) return png(sheet);
+            int[] ga = aboveGround(a), gb = aboveGround(b);
+            int[] above = ga == null ? gb : gb == null ? ga : new int[]{Math.min(ga[0], gb[0]), Math.min(ga[1], gb[1]), Math.min(ga[2], gb[2]),
+                    Math.max(ga[3], gb[3]), Math.max(ga[4], gb[4]), Math.max(ga[5], gb[5])};
+            VoxelRaster.Camera se = VoxelRaster.iso(u, 0, tw, th), sw = VoxelRaster.iso(u, 1, tw, th), eye = VoxelRaster.eye(above, tw, th);
+            int reach = (int) Math.ceil(Math.max(above[3] - above[0], above[4] - above[1]) * 2.5 + 80);
+            VoxelRaster.Options opt = VoxelRaster.Options.defaults();
+            VoxelModel[] m = {a, b};
+            String[] name = {"A", "B"};
+            for (int r = 0; r < 2; r++) {
+                tile(g, VoxelRaster.render(m[r], info, se, opt), 0, r * th, name[r] + ": south-east");
+                tile(g, VoxelRaster.render(m[r], info, sw, opt), tw, r * th, name[r] + ": south-west");
+                tile(g, VoxelRaster.render(m[r], info, eye, opt.ground(reach)), 2 * tw, r * th, name[r] + ": eye level from the front");
+            }
+        } finally {
+            g.dispose();
+        }
+        return png(sheet);
+    }
+
     /**
      * Interiors: up to four rooms (2 × 2 tiles), each seen steeply from above with everything higher than its
      * furniture removed, so the model sees what stands in the room. {@code rooms} are {x1,z1,x2,z2,y,label...}

@@ -16,7 +16,7 @@ import java.util.Set;
  *
  * @param model           model id sent to the gateway, e.g. {@code "deepseek/deepseek-v4.1-flash"} (never blank)
  * @param messages        conversation, oldest first; must contain at least one message
- * @param maxTokens       upper bound for generated tokens, clamped to {@code [1, 200_000]}
+ * @param maxTokens       upper bound for generated tokens, clamped to {@code [1, 393_216]}
  * @param temperature     sampling temperature in {@code [0, 2]} or {@code null} to use the provider default
  * @param reasoningEffort {@code "low"|"medium"|"high"|"max"} or {@code null} for the provider default
  * @param jsonMode        when {@code true}, ask for an OpenAI {@code response_format={"type":"json_object"}}
@@ -32,8 +32,8 @@ public record ChatRequest(String model,
     public static final String DEFAULT_MODEL = "deepseek/deepseek-v4.1-flash";
     /** Lowest accepted {@link #maxTokens()} value. */
     public static final int MIN_TOKENS = 1;
-    /** Highest accepted {@link #maxTokens()} value; guards against absurd hand-written config. */
-    public static final int MAX_TOKENS_LIMIT = 200_000;
+    /** Highest accepted {@link #maxTokens()} value: the model's own output limit (DeepSeek V4.x, thinking included). */
+    public static final int MAX_TOKENS_LIMIT = 393_216;
 
     /** Values accepted by the Command Code gateway for DeepSeek V4.x ("off" disables thinking). */
     private static final Set<String> EFFORTS = Set.of("off", "low", "medium", "high", "xhigh", "max");

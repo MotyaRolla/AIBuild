@@ -72,6 +72,13 @@ public final class Job {
     public volatile Boolean concepts, sculptRefine, interiors;
     /** The design concept the chosen script follows, null when there was none. */
     public volatile String concept;
+    /**
+     * The 3.3 detail pipeline: confined rewrites, the build sheet in prompts, lean sculptor context, the
+     * self-check round, close-up revision judging and writing the script once. Off only for benchmarks of 3.2.
+     */
+    public volatile boolean detail33 = true;
+    /** Build in the studio (the AI runs its own loop); null = as generation.create-strategy says. */
+    public volatile Boolean studio;
     /** The request enhancer for this job instead of the configured choice (benchmarks); null = config. */
     public volatile Boolean enhance;
     /** The request worked out by the enhancer, null when it was off or failed; the user's words stay the authority. */

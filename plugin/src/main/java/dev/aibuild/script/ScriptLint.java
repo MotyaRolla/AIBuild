@@ -156,6 +156,52 @@ public final class ScriptLint {
         return null;
     }
 
+    /**
+     * The script with the body of every part() call folded to a one-line comment, except the part {@code keep}
+     * and the parts that enclose it: what a sculptor of one part needs to read (the top-level constants and
+     * helpers, the part order, its own source) without the thousands of lines of the others. {@code describe}
+     * gives a part's size and bounds for its comment (by name; may be empty).
+     */
+    public static String foldOtherParts(String source, String keep, java.util.Map<String, String> describe) {
+        int[] target = partSpan(source, keep);
+        if (target == null) return source;
+        java.util.List<int[]> spans = new java.util.ArrayList<>();
+        java.util.List<String> names = new java.util.ArrayList<>();
+        Matcher m = PART_NAME.matcher(source);
+        while (m.find()) {
+            if (inCommentOrString(source, m.start())) continue;
+            int open = source.indexOf('(', m.start());
+            int end = matchParen(source, open);
+            if (end < 0) continue;
+            int j = end;
+            while (j < source.length() && (source.charAt(j) == ' ' || source.charAt(j) == '\t')) j++;
+            if (j < source.length() && source.charAt(j) == ';') end = j + 1;
+            spans.add(new int[]{m.start(), end});
+            names.add(m.group(1));
+        }
+        StringBuilder out = new StringBuilder();
+        int cursor = 0;
+        for (int i = 0; i < spans.size(); i++) {
+            int[] s = spans.get(i);
+            if (s[0] < cursor) continue;                                     // inside a part already folded or kept whole
+            if (s[0] == target[0]) {                                         // the part itself, with everything in it
+                out.append(source, cursor, s[1]);
+                cursor = s[1];
+                continue;
+            }
+            if (s[0] <= target[0] && s[1] >= target[1]) continue;            // encloses the part: open it up
+            String body = source.substring(s[0], s[1]);
+            long lines = body.chars().filter(c -> c == '\n').count() + 1;
+            String what = describe.getOrDefault(names.get(i), "");
+            out.append(source, cursor, s[0])
+                    .append("part('").append(names.get(i)).append("', () => { /* ").append(lines).append(" lines not shown")
+                    .append(what.isEmpty() ? "" : "; " + what).append(" */ })").append(body.endsWith(";") ? ";" : "");
+            cursor = s[1];
+        }
+        out.append(source.substring(cursor));
+        return out.toString();
+    }
+
     /** Names of all part() calls written in the script, in source order. */
     public static java.util.List<String> partNames(String source) {
         java.util.List<String> out = new java.util.ArrayList<>();

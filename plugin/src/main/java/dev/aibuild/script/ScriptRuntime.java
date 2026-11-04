@@ -64,13 +64,25 @@ public final class ScriptRuntime {
     private static final SandboxFactory FACTORY = new SandboxFactory();
 
     /** Per-run limits. */
+    /**
+     * Per-run limits. They guard the server, not the design: a live script did ~260M instructions in 0.7 s, so the
+     * old 300M cap stopped real builds after a second of work. The instruction cap is deterministic (a stored
+     * script re-runs to the same model); the time cap only stops a stuck loop; memory is guarded by the live heap
+     * after garbage collection ({@code allocatedBytes} caps the run's total allocations, garbage included, so it
+     * is set far above anything a real build allocates).
+     */
     public record Budget(long instructions, long millis, long allocatedBytes, int maxCells, long samples) {
         public static Budget standard() {
-            return new Budget(300_000_000L, 40_000, 8L << 30, 1_500_000, 600_000_000L);
+            return new Budget(30_000_000_000L, 120_000, 4_000L << 30, 4_000_000, 60_000_000_000L);
         }
 
         public static Budget extra() {
-            return new Budget(700_000_000L, 80_000, 16L << 30, 2_500_000, 1_400_000_000L);
+            return new Budget(60_000_000_000L, 240_000, 8_000L << 30, 4_000_000, 120_000_000_000L);
+        }
+
+        /** The same budget with {@code factor} times the wall-clock time: re-running a script that already finished. */
+        public Budget rerun(int factor) {
+            return new Budget(instructions, millis * Math.max(1, factor), allocatedBytes, maxCells, samples);
         }
     }
 
@@ -153,7 +165,8 @@ public final class ScriptRuntime {
         if (error == null) c.settle();
         return new ScriptResult(c.model(), error, run.meta, c.parts(), c.owners(), c.smoothed(), List.copyOf(run.logs),
                 merge(c.warnings(), c.outside()), c.outside(), run.instructions, System.currentTimeMillis() - start,
-                List.copyOf(run.doorways), c.collisions(), Map.copyOf(c.overlaps()));
+                List.copyOf(run.doorways), c.collisions(), Map.copyOf(c.overlaps()), c.confinements(),
+                c.anchors(), c.notes(), List.copyOf(run.options.values()));
     }
 
     private static List<String> merge(List<String> warnings, long outside) {
@@ -209,8 +222,10 @@ public final class ScriptRuntime {
         final Map<String, Material> parsed = new HashMap<>();
         final List<String> logs = new ArrayList<>();
         final List<Doorway> doorways = new ArrayList<>();
+        final Map<String, ScriptResult.Option> options = new java.util.LinkedHashMap<>();
         JsonObject meta = new JsonObject();
         long instructions;
+        int ticks;
         int logChars;
 
         Run(long seed, VoxelModel model, int[] limits, Budget budget, AtomicBoolean cancel, long start) {
@@ -255,6 +270,9 @@ public final class ScriptRuntime {
             if (a > 0 && a - allocatedAtStart > budget.allocatedBytes()) {
                 throw new ScriptBudgetException("memory budget exhausted: build smaller arrays/objects");
             }
+            if ((++ticks & 63) == 0 && heapNearlyFull()) {
+                throw new ScriptBudgetException("the server is running out of memory: build smaller arrays/objects");
+            }
         }
 
         Shape shape(Object handle) {
@@ -264,7 +282,7 @@ public final class ScriptRuntime {
         }
 
         int addShape(Shape s) {
-            if (shapes.size() > 200_000) throw new ScriptBudgetException("too many shapes created");
+            if (shapes.size() > 5_000_000) throw new ScriptBudgetException("too many shapes created");
             shapes.add(s);
             return shapes.size() - 1;
         }
@@ -293,12 +311,109 @@ public final class ScriptRuntime {
             } catch (IllegalArgumentException e) {
                 // a bare wood name ('dark_oak') means its planks, as in stair('dark_oak', ...)
                 if (raw.matches("[a-z_]+") && families.exists(raw + "_planks")) return new Material.Fixed(info.parse(raw + "_planks"));
+                Material fixed = lenient(raw);
+                if (fixed != null) return fixed;
                 throw new IllegalArgumentException(e.getMessage() + suggest(raw));
             }
         }
 
+        /**
+         * A block name the model got slightly wrong, corrected the way a builder would read it, with a warning: an
+         * unknown property is dropped, a shape that does not exist in that material falls back to the nearest one
+         * that does ({@code polished_andesite_wall} -> {@code andesite_wall}) or to the full block, and a name one or
+         * two letters off becomes the real one. Null when nothing close exists: then the script stops, because
+         * guessing further would build something the model did not mean. Deterministic, so a stored script re-runs
+         * the same way.
+         */
+        private Material lenient(String raw) {
+            if (raw.contains("%") || (raw.contains(",") && !raw.contains("["))) {
+                StringBuilder sb = new StringBuilder();
+                boolean changed = false;
+                for (String entry : raw.split(",")) {
+                    String t = entry.strip();
+                    int pc = t.indexOf('%');
+                    String weight = pc < 0 ? "" : t.substring(0, pc + 1);
+                    String block = pc < 0 ? t : t.substring(pc + 1);
+                    BlockSpec spec = lenientSpec(block);
+                    if (spec != null && !block.equals(spec.toString())) changed = true;
+                    if (sb.length() > 0) sb.append(',');
+                    sb.append(weight).append(spec == null ? block : spec.toString());
+                }
+                if (!changed) return null;
+                try {
+                    Material m = new Material.Pattern(BlockPattern.parse(sb.toString(), info));
+                    canvas.warn("auto-corrected: '" + raw + "' -> '" + sb + "'");
+                    return m;
+                } catch (IllegalArgumentException e) {
+                    return null;
+                }
+            }
+            BlockSpec spec = lenientSpec(raw);
+            if (spec == null) return null;
+            canvas.warn("auto-corrected: '" + raw + "' -> '" + spec + "'");
+            return new Material.Fixed(spec);
+        }
+
+        private static final String[] SHAPES = {"_stairs", "_slab", "_wall", "_fence_gate", "_fence", "_trapdoor", "_door",
+                "_button", "_pressure_plate", "_sign", "_carpet", "_pane"};
+
+        private BlockSpec lenientSpec(String raw) {
+            BlockSpec wanted;
+            try {
+                wanted = BlockSpec.parseRaw(raw.strip());
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
+            String name = wanted.name().startsWith("minecraft:") ? wanted.name().substring(10) : wanted.name();
+            String real = realName(name, wanted.props().containsKey("axis"));
+            if (real == null) return null;
+            BlockSpec out;
+            try {
+                out = info.parse(real);
+            } catch (IllegalArgumentException e) {
+                return null;
+            }
+            for (Map.Entry<String, String> p : wanted.props().entrySet()) {
+                try {
+                    out = info.with(out, p.getKey(), p.getValue());
+                } catch (IllegalArgumentException dropped) {
+                    // a property this block does not have ('hanging' on a chain): the block without it
+                }
+            }
+            return out;
+        }
+
+        /** The existing block a wrong name most likely means, or null; {@code axis}: the model gave a log's axis. */
+        private String realName(String name, boolean axis) {
+            java.util.Collection<String> names = info.blockNames();
+            if (names.contains(name)) return name;
+            // a bare material name: 'dark_oak[axis=y]' is its log, 'dark_oak' its planks, 'deepslate_brick' the bricks
+            for (String full : axis ? new String[]{name + "_log", name + "_stem", name + "_planks"}
+                    : new String[]{name + "_planks", name + "s", name + "_block"}) {
+                if (names.contains(full)) return full;
+            }
+            for (String shape : SHAPES) {
+                if (!name.endsWith(shape)) continue;
+                String[] tokens = name.substring(0, name.length() - shape.length()).split("_");
+                // drop leading qualifiers until the shape exists: polished_andesite_wall -> andesite_wall
+                for (int i = 1; i < tokens.length; i++) {
+                    String cand = String.join("_", java.util.Arrays.copyOfRange(tokens, i, tokens.length)) + shape;
+                    if (names.contains(cand)) return cand;
+                }
+                // no such shape in this material: the full block keeps the form readable
+                String root = String.join("_", tokens);
+                for (String full : new String[]{root, root + "s", root + "_planks", root + "_block"}) {
+                    if (names.contains(full)) return full;
+                }
+                break;
+            }
+            List<String> near = Suggest.nearest(name, names, 1);
+            if (!near.isEmpty() && Suggest.distance(name, near.get(0)) <= 2) return near.get(0);
+            return null;
+        }
+
         int addMaterial(Material m) {
-            if (materials.size() > 50_000) throw new ScriptBudgetException("too many materials created");
+            if (materials.size() > 1_000_000) throw new ScriptBudgetException("too many materials created");
             materials.add(m);
             return materials.size() - 1;
         }
@@ -308,6 +423,21 @@ public final class ScriptRuntime {
         String name = BlockSpec.parseRaw(raw).name();
         List<String> near = Suggest.nearest(name, info.blockNames(), 3);
         return near.isEmpty() ? "" : " (did you mean " + String.join(", ", near) + "?)";
+    }
+
+    /**
+     * True when the old generation is still over 90% full after its last collection: live data, not garbage. Only
+     * that can take the server down, whatever the script allocated and dropped on the way.
+     */
+    static boolean heapNearlyFull() {
+        for (java.lang.management.MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+            if (pool.getType() != java.lang.management.MemoryType.HEAP || !pool.isCollectionUsageThresholdSupported()) continue;
+            java.lang.management.MemoryUsage u = pool.getCollectionUsage();
+            if (u == null || u.getMax() <= 0) continue;
+            String n = pool.getName().toLowerCase(java.util.Locale.ROOT);
+            if ((n.contains("old") || n.contains("tenured")) && u.getUsed() > u.getMax() * 0.9) return true;
+        }
+        return false;
     }
 
     private static long allocated(long threadId) {
@@ -335,6 +465,24 @@ public final class ScriptRuntime {
             }
         };
         ScriptableObject.defineProperty(scope, name, new LambdaFunction(scope, name, arity, c), ScriptableObject.DONTENUM);
+    }
+
+    /**
+     * A write primitive (block, box, line, place, mark): a call with a NaN or infinite coordinate is skipped with a
+     * warning instead of stopping the whole script. One bad number in a loop used to cost the model a full retry;
+     * the rest of the build is unaffected by skipping that one write.
+     */
+    private static void fnSkip(ScriptableObject scope, Run run, String name, int arity, Host body) {
+        fn(scope, name, arity, (cx, sc, args) -> {
+            try {
+                return body.call(cx, sc, args);
+            } catch (NonFiniteException e) {
+                String api = name.startsWith("__") ? name.substring(2) : name;
+                run.canvas.warn("auto-corrected: " + api + "() calls with a NaN or infinite coordinate were skipped ("
+                        + e.getMessage() + ")");
+                return Undefined.instance;
+            }
+        });
     }
 
     private void install(Context cx, ScriptableObject scope, Run run) {
@@ -393,8 +541,54 @@ public final class ScriptRuntime {
             run.meta = j.getAsJsonObject();
             return Undefined.instance;
         });
+        fn(scope, "__option", 4, (c, s, a) -> {
+            String name = Context.toString(a[0]);
+            List<String> choices = new ArrayList<>();
+            for (com.google.gson.JsonElement e : com.google.gson.JsonParser.parseString(Context.toString(a[1])).getAsJsonArray()) {
+                choices.add(e.getAsString());
+            }
+            run.options.putIfAbsent(name, new ScriptResult.Option(name, List.copyOf(choices), (int) num(a[2]), Boolean.TRUE.equals(a[3])));
+            return Undefined.instance;
+        });
+        fn(scope, "__note", 1, (c, s, a) -> {
+            run.canvas.note(Context.toString(a[0]));
+            return Undefined.instance;
+        });
+        fnSkip(scope, run, "__mark", 4, (c, s, a) -> {
+            if (!(a[1] instanceof org.mozilla.javascript.NativeArray arr)) throw new IllegalArgumentException("mark(): give x, y, z or [x1, y1, z1, x2, y2, z2]");
+            double[] xyz = new double[(int) arr.getLength()];
+            for (int i = 0; i < xyz.length; i++) xyz[i] = num(arr.get(i, arr));
+            return run.canvas.mark(Context.toString(a[0]), xyz, a[2] == null || a[2] == Undefined.instance ? "" : Context.toString(a[2]),
+                    Boolean.TRUE.equals(a[3]));
+        });
+        fn(scope, "__anchor", 1, (c, s, a) -> {
+            Canvas.Anchor an = run.canvas.anchor(Context.toString(a[0]));
+            if (an == null) return null;
+            Scriptable o = c.newObject(s);
+            int[] b = an.box();
+            if (an.point()) {
+                ScriptableObject.putProperty(o, "x", b[0]);
+                ScriptableObject.putProperty(o, "y", b[1]);
+                ScriptableObject.putProperty(o, "z", b[2]);
+            } else {
+                String[] k = {"x1", "y1", "z1", "x2", "y2", "z2"};
+                for (int i = 0; i < 6; i++) ScriptableObject.putProperty(o, k[i], b[i]);
+            }
+            ScriptableObject.putProperty(o, "note", an.note());
+            ScriptableObject.putProperty(o, "name", an.key());
+            return o;
+        });
+        fn(scope, "__confine", 2, (c, s, a) -> {
+            run.canvas.confine(Context.toString(a[0]), Context.toString(a[1]));
+            return Undefined.instance;
+        });
         fn(scope, "__part", 1, (c, s, a) -> {
             run.canvas.beginPart(Context.toString(a[0]));
+            if (run.canvas.confiningRooms()) {
+                List<int[]> boxes = new ArrayList<>();
+                for (var r : run.rooms()) boxes.add(new int[]{r.x1(), r.z1(), r.x2(), r.z2(), r.y()});
+                run.canvas.scopeRooms(boxes);
+            }
             run.rngStack.push(run.rng);
             run.rng = new SplittableRandom(run.seed ^ run.canvas.currentPart().hashCode() * 0x9E3779B97F4A7C15L
                     ^ run.canvas.partCall() * 0xC2B2AE3D27D4EB4FL);
@@ -421,16 +615,16 @@ public final class ScriptRuntime {
             run.canvas.pop();
             return Undefined.instance;
         });
-        fn(scope, "__block", 4, (c, s, a) -> {
+        fnSkip(scope, run, "__block", 4, (c, s, a) -> {
             Material m = run.material(a[3]);
             double[] p = run.canvas.frame().point(num(a[0]), num(a[1]), num(a[2]));
             int x = (int) Math.round(p[0]), y = (int) Math.round(p[1]), z = (int) Math.round(p[2]);
             run.canvas.setWorld(x, y, z, run.canvas.orient(m.pick(Material.Sample.at(x, y, z))), false);
             return Undefined.instance;
         });
-        fn(scope, "__box", 8, (c, s, a) -> box(run, new double[]{num(a[0]), num(a[1]), num(a[2])},
+        fnSkip(scope, run, "__box", 8, (c, s, a) -> box(run, new double[]{num(a[0]), num(a[1]), num(a[2])},
                 new double[]{num(a[3]), num(a[4]), num(a[5])}, a[6], a.length > 7 ? Context.toString(a[7]) : "fill"));
-        fn(scope, "__line", 4, (c, s, a) -> {
+        fnSkip(scope, run, "__line", 4, (c, s, a) -> {
             double[] from = vec(a[0]), to = vec(a[1]);
             Material m = run.material(a[2]);
             double r = a.length > 3 && !Undefined.isUndefined(a[3]) ? num(a[3]) : 0;
@@ -438,7 +632,7 @@ public final class ScriptRuntime {
                 return Rasterizer.place(run.canvas, Shape.capsule(from, to, r, r), m, Rasterizer.Options.SOLID, run.samples);
             }
             int n = (int) Math.ceil(Math.max(Math.abs(to[0] - from[0]), Math.max(Math.abs(to[1] - from[1]), Math.abs(to[2] - from[2]))));
-            if (n > 4096) throw new IllegalArgumentException("line longer than 4096 blocks");
+            if (n > 100_000) throw new IllegalArgumentException("line longer than 100000 blocks");
             String axis = Math.abs(to[1] - from[1]) >= Math.max(Math.abs(to[0] - from[0]), Math.abs(to[2] - from[2])) ? "y"
                     : Math.abs(to[0] - from[0]) >= Math.abs(to[2] - from[2]) ? "x" : "z";
             for (int i = 0; i <= n; i++) {
@@ -463,7 +657,7 @@ public final class ScriptRuntime {
             double[] b = run.shape(a[0]).bounds();
             return c.newArray(s, new Object[]{b[0] + 0.5, b[1] + 0.5, b[2] + 0.5, b[3] - 0.5, b[4] - 0.5, b[5] - 0.5});
         });
-        fn(scope, "__place", 3, (c, s, a) -> {
+        fnSkip(scope, run, "__place", 3, (c, s, a) -> {
             Shape sh = run.shape(a[0]);
             Scriptable o = a.length > 2 && a[2] instanceof Scriptable so ? so : null;
             boolean carve = bool(o, "carve");
@@ -514,7 +708,7 @@ public final class ScriptRuntime {
             hi[i] = (int) Math.round(Math.max(a[i], b[i]));
         }
         long volume = (long) (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1);
-        if (volume > 600_000) throw new IllegalArgumentException("box of " + volume + " cells is too large (max 600000)");
+        if (volume > 40_000_000L) throw new IllegalArgumentException("box of " + volume + " cells is larger than the whole build space");
         Frame f = canvas.frame();
         boolean grid = f.exactStates() && f.minStretch() == 1;
         if (!grid) {
@@ -713,8 +907,15 @@ public final class ScriptRuntime {
     static double num(Object o) {
         if (o == null || Undefined.isUndefined(o)) throw new IllegalArgumentException("missing number");
         double d = Context.toNumber(o);
-        if (!Double.isFinite(d)) throw new IllegalArgumentException("number is not finite (" + Context.toString(o) + ")");
+        if (!Double.isFinite(d)) throw new NonFiniteException("number is not finite (" + Context.toString(o) + ")");
         return d;
+    }
+
+    /** A NaN or infinite coordinate: a write primitive skips just that call (see {@link #fnSkip}). */
+    static final class NonFiniteException extends IllegalArgumentException {
+        NonFiniteException(String message) {
+            super(message);
+        }
     }
 
     static double[] vec(Object o) {

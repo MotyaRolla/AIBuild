@@ -129,6 +129,105 @@ public final class ScriptPrompts {
                 + (blockList == null || blockList.isBlank() ? "" : "\n# VALID BLOCK IDS (Minecraft Java 26.3 — use ONLY these)\n" + blockList);
     }
 
+    private static final String STUDIO_CONTRACT = """
+            # YOU RUN THE STUDIO
+            You work in turns, like a professional builder at the build site. Each answer of yours is carried out
+            and you get back what happened: the run (or its traceback), warnings and auto-corrections, the parts and
+            build sheet, the analyzer's findings, and renders of the build. Nothing you build is rejected or changed
+            behind your back: the findings are advice, you decide what matters. You decide when the build is done.
+
+            In each answer use any of these (several per answer are fine; they run in this order):
+            - The whole script in ONE ```js block (your first answer, or a rewrite), or SEARCH/REPLACE hunks against
+              the current script for changes (exact lines from the script; include enough context to be unique):
+                <<<<<<< SEARCH
+                exact existing lines
+                =======
+                new lines
+                >>>>>>> REPLACE
+            - ```look with a view or a list of up to 4 views (one image):
+                {"part":"keep","side":"se|sw|nw|ne"}   {"box":[x1,y1,z1,x2,y2,z2],"side":"sw"}
+                {"eye":"south|north|east|west","distance":30}  (eye level, where a player arrives)
+                {"from":[x,y,z],"at":[x,y,z],"fov":70}  {"top":true}  {"cut":5}  (floor plan at y=5)
+                {"elevation":"south"}  {"rooms":true}  {"side":"nw"}  (the whole build from that corner)
+            - ```inspect {"box":[x1,y1,z1,x2,y2,z2]}  exact blocks of a small region, layer by layer, as text.
+            - ```guide with a handbook topic (below): professional techniques with tested code.
+            - ```delegate {"part":"name","brief":"what to refine and how"}  a helper refines that part in parallel
+              with the same tools; you see its result and decide ACCEPT d1 or DISCARD d1. WAIT waits for helpers.
+            - Design options: when you are unsure which of a few ideas is best (roof form, window rhythm, tower
+              height, palette), write option('roof', ['gable','hipped','mansard']) in the script and use its value.
+              The studio builds every choice of a new option and shows them side by side from the same camera:
+              comparing beats imagining. PICK roof=hipped keeps one (written as decide({...}) on the first line).
+            - The RED PEN: after each run, measured notes on what a professional sees at a glance (pieces floating in
+              the air, walls with no depth, roofs with no eave, surfaces of block-by-block noise), numbered and
+              circled on an image. They are advice: fix the ones that matter for this build with real craft (depth,
+              frames, overhangs, patches), never by sticking clutter on to clear a mark; KEEP n when it is intended.
+            - Before a version ships you may be shown it and an earlier version blind, as A and B: answer PREFER A
+              or PREFER B, judged as a player would.
+            - REVERT n  (make version n current again)   FINISH  (apply the finisher's proposed repairs)
+            - DONE  or  DONE n  on a line of its own when the build is finished (n = the version to ship; default the
+              current one). When time runs out, the current version ships.
+            Write one or two sentences of what you are doing and why before your blocks; it is your build diary.
+            The script keeps the usual form: a comment block, meta({...}), named part('...') blocks, seeded rng().
+            Scripts are re-run deterministically, so the same script always gives the same build.
+            """;
+
+    /** System prompt of a studio session: the same knowledge and API, with the turn protocol instead of one answer. */
+    public static String studioSystem(Stdlib lib, String blockList) {
+        return HEAD + "\n" + Prompts.blockStateRules()
+                + "\n- Kits (door, windowAt, roof, stairs, column, chair...) orient their blocks for you: prefer them.\n\n"
+                + CRAFT_V2 + "\n" + lib.apiCard() + "\n" + STUDIO_CONTRACT + "\n" + Handbook.contents()
+                + "\n# EXAMPLES (style reference only; do not copy)\n" + examples(lib)
+                + (blockList == null || blockList.isBlank() ? "" : "\n# VALID BLOCK IDS (Minecraft Java 26.3 — use ONLY these)\n" + blockList);
+    }
+
+    /** The first message of a studio session for a new build. */
+    public static String studioStart(Stdlib lib, String request, String scale, int minutes, boolean delegate) {
+        String recipes = Recipes.forRequest(lib, request);
+        return """
+                %s
+
+                %s
+                Make the best build you can of this, the way a professional builder works: understand the subject and
+                what makes it unmistakable, settle scale and massing, write the script, then look at what you built
+                (from far, at eye level, close up), and refine where it matters most, until you would show it. %s
+                You have about %d minutes. There are no fixed steps: spend your turns where they improve the build.
+                %sStart with your first complete script.
+                """.formatted(Prompts.request("BUILD REQUEST", request), recipes.isBlank() ? "" : recipes + "\n", scale, minutes,
+                delegate ? "For a big build you can delegate parts to helpers once the whole exists, and keep working meanwhile.\n" : "");
+    }
+
+    /** The first message of a studio session that changes an existing build. */
+    public static String studioEdit(String original, String change, int minutes) {
+        return """
+                BUILD REQUEST (the original one): "%s"
+                CHANGE REQUESTED NOW: "%s"
+
+                Below is version 1: the build as it stands, its script, analysis and renders. Make the change the way a
+                professional builder would, keeping what already works, look at the result, and say DONE when it is
+                right. You have about %d minutes.
+                """.formatted(original, change, minutes);
+    }
+
+    /** The first message of a helper session: one part of the lead's build. */
+    public static String studioHelper(String request, String part, String brief, String folded, String sheet) {
+        return """
+                BUILD REQUEST: "%s"
+
+                You are a helper on this build. The lead builder hands you part('%s'):
+                %s
+
+                Refine only that part. Answer with the new part('%s', () => { ... }) statement in a ```js block (or
+                SEARCH/REPLACE hunks inside it); the rest of the script stays as the lead has it. Look at your part and
+                say DONE when it is right. The lead decides whether your part goes in.
+
+                THE SCRIPT, other parts folded to one line with their bounds:
+                ```js
+                %s```
+                %s
+                """.formatted(request, part, brief == null || brief.isBlank() ? "(no brief: make it the best it can be)" : brief,
+                part, folded, sheet == null ? "" : sheet);
+    }
+
     /** First construction request. {@code scale} describes the block budget of the mode. */
     public static String create(String request, String scale) {
         return create(Stdlib.V1, request, scale);
@@ -141,6 +240,15 @@ public final class ScriptPrompts {
 
     /** As above, following {@code concept} (a design brief from {@link #concepts}) when it is not null. */
     public static String create(Stdlib lib, String request, String scale, String concept) {
+        return create(lib, request, scale, concept, false, false);
+    }
+
+    /**
+     * As above. {@code sheet} asks for the build sheet (a note() per part, mark() for key points, details placed
+     * relative to anchors); {@code writeOnce} asks the model to settle the design in its thinking and write the
+     * script only once, in the answer: a live build's reasoning drafted the whole script and then wrote it again.
+     */
+    public static String create(Stdlib lib, String request, String scale, String concept, boolean sheet, boolean writeOnce) {
         if (lib == Stdlib.V1) {
             return """
                     %s
@@ -161,10 +269,20 @@ public final class ScriptPrompts {
                 2. The parts with their sizes and how they connect; which kits build each part.
                 3. The setting that frames it, and the focal areas that get the most detail.
                 4. How you avoid the failure modes (flat walls, visible primitives, single-block surfaces).
-                Then write the complete build script. %s
+                %s%sThen write the complete build script. %s
                 """.formatted(Prompts.request("BUILD REQUEST", request), recipes.isBlank() ? "" : recipes,
                 concept == null ? "" : "\nDESIGN CONCEPT for your version (follow it; where it conflicts with the request, the request wins):\n"
-                        + concept + "\n", scale);
+                        + concept + "\n",
+                sheet ? """
+                        5. The build sheet later passes work from: inside each part() write one note('...') with its
+                           signature details and the space it keeps clear ("spiral stair in the SE corner, keep 3x3 clear"),
+                           and mark('name', ...) the points details hang on (gate arch, balcony line, stair well). Kits
+                           mark their own bodies, doors, towers and walls. Place details from the kits' return values,
+                           partBox() and anchor(), not from retyped numbers.
+                        """ : "",
+                writeOnce ? "Settle the layout, the parts and their anchors in your thinking, but do not draft the script"
+                        + " there: write the code once, in your answer.\n" : "",
+                scale);
     }
 
     /**
@@ -342,7 +460,7 @@ public final class ScriptPrompts {
     /** A sculptor rewrites one part() statement at a higher level of craft. */
     public static String sculptor(String request, String name, String bounds, String brief, String partSource,
                                   String script, boolean image) {
-        return sculptor(request, null, name, bounds, brief, partSource, script, image, false);
+        return sculptor(request, null, name, bounds, brief, partSource, script, image, false, "", false);
     }
 
     /**
@@ -351,6 +469,18 @@ public final class ScriptPrompts {
      */
     public static String sculptor(String request, String concept, String name, String bounds, String brief, String partSource,
                                   String script, boolean image, boolean refine) {
+        return sculptor(request, concept, name, bounds, brief, partSource, script, image, refine, "", false);
+    }
+
+    /**
+     * As above, with the build sheet ({@code sheet}, may be empty) and, when {@code folded}, a script whose other
+     * parts are folded to one-line comments with their bounds: the sculptor reads what it needs, not every line.
+     */
+    public static String sculptor(String request, String concept, String name, String bounds, String brief, String partSource,
+                                  String script, boolean image, boolean refine, String sheet, boolean folded) {
+        String context = (sheet.isEmpty() ? "" : sheet + "\n")
+                + (folded ? "THE SCRIPT, other parts folded to their bounds (read-only context; their blocks are locked):\n"
+                          : "WHOLE SCRIPT (read-only context):\n");
         if (refine) return """
                 %s
                 %sYou are a master builder. Refine ONE part of this build: part('%s'), currently %s (world coordinates).
@@ -374,10 +504,9 @@ public final class ScriptPrompts {
                 ```js
                 %s
                 ```
-                WHOLE SCRIPT (read-only context):
-                %s""".formatted(Prompts.request("BUILD REQUEST", request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n", name, bounds, brief,
+                %s%s""".formatted(Prompts.request("BUILD REQUEST", request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n", name, bounds, brief,
                 image ? "The attached image shows close-ups of this part in the build." : "", name, partSource,
-                dev.aibuild.script.ScriptPatch.numbered(script));
+                context, dev.aibuild.script.ScriptPatch.numbered(script));
         return """
                 %s
                 You are a master builder. Rewrite ONE part of this build: part('%s'), currently %s (world coordinates).
@@ -397,10 +526,9 @@ public final class ScriptPrompts {
                 ```js
                 %s
                 ```
-                WHOLE SCRIPT (read-only context):
-                %s""".formatted(Prompts.request("BUILD REQUEST", request), name, bounds, brief,
+                %s%s""".formatted(Prompts.request("BUILD REQUEST", request), name, bounds, brief,
                 image ? "The attached image shows close-ups of this part in the build." : "", name, partSource,
-                dev.aibuild.script.ScriptPatch.numbered(script));
+                context, dev.aibuild.script.ScriptPatch.numbered(script));
     }
 
     /**
@@ -481,6 +609,50 @@ public final class ScriptPrompts {
             (not flat walls or raw boxes), coherent palette, composition and setting, detail quality where the eye
             goes. Bigger or busier is not better by itself. Ignore image order and labels; judge only the builds.
             Answer with ONE JSON object: {"winner":"A"|"B"|"tie","reasons":["...","...","..."]}""";
+
+    /**
+     * The self-check round of a sculptor: it sees its part before and after its rewrite, what the runtime skipped
+     * and how the measured quality moved, and corrects once or answers KEEP.
+     */
+    public static String selfCheck(String name, String brief, int skipped, java.util.List<String> samples, String before, String after) {
+        return """
+                Your rewrite of part('%s') runs and passed the checks. Look at what it actually built before it is judged:
+                image 1 is the part before your rewrite, image 2 after it (same camera).
+                %s
+                Measured before: %s
+                Measured after:  %s
+                Compare image 2 with your intent and the brief (%s). Look for what code alone hides: trims or frames one
+                block off, gaps and holes, details that did not come out or come out flat, blocks floating or stuck in a
+                wall, a part that no longer meets its neighbours, details too busy or too small to read.
+                If it is right, answer exactly KEEP. Otherwise answer ONE ```js block with the complete corrected
+                part('%s', () => { ... }); statement (change only what needs it).""".formatted(name,
+                skipped == 0 ? "" : skipped + " of your writes would have broken other parts' blocks and were skipped, e.g. "
+                        + String.join(", ", samples) + ".",
+                before, after, brief == null ? "" : brief.length() > 600 ? brief.substring(0, 600) + "…" : brief, name);
+    }
+
+    /** The interior designer's self-check: the rooms from above before and after its furnishing. */
+    public static String interiorSelfCheck(String name, int skipped, java.util.List<String> samples) {
+        return """
+                Your furnishing part('%s') runs and passed the checks. Image 1 shows the rooms from above before it,
+                image 2 after it (same views). %s
+                Check each room against its purpose: furniture that blocks a door, stair or ladder, pieces floating or
+                stuck in a wall, rooms left bare or crammed, lights missing where it is dark, pieces facing the wall.
+                If it is right, answer exactly KEEP. Otherwise answer ONE ```js block with the complete corrected
+                part('%s', () => { ... }); statement.""".formatted(name,
+                skipped == 0 ? "" : skipped + " of your writes fell outside the rooms and were skipped, e.g. " + String.join(", ", samples) + ".",
+                name);
+    }
+
+    /** The judge of a revision: per build an overview and close-ups of the areas where the two builds differ. */
+    public static String judgeRevision(String request) {
+        return Prompts.request("REQUEST", request) + "\nImages 1 and 2 are build A: an overview (four sides) and close-ups of the"
+                + " areas where A and B differ. Images 3 and 4 are build B: the same overview and the same close-up areas."
+                + " The builds are the same elsewhere, so the close-ups decide: compare form, depth, detail and craft"
+                + " there, and whether anything there looks broken, unfinished or out of place. Use the overviews only to"
+                + " check that the change does not spoil the whole. Which build is better? If the close-ups look equally"
+                + " good, answer tie.";
+    }
 
     public static String judge(String request) {
         return Prompts.request("REQUEST", request) + "\nThe first image is build A, the second image is build B "

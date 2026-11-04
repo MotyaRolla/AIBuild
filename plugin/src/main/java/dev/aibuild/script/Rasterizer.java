@@ -19,8 +19,9 @@ import java.util.Map;
  */
 public final class Rasterizer {
     /** Hard cap on distance evaluations for one placement (cells x shape cost). */
-    public static final long MAX_SAMPLES = 120_000_000L;
-    private static final int MAX_SMOOTH_VOLUME = 6_000_000;
+    public static final long MAX_SAMPLES = 6_000_000_000L;
+    /** Cells one placement may cover: about the whole build space (the grid keeps 6 bytes per cell). */
+    private static final int MAX_VOLUME = 40_000_000;
 
     private static final byte EMPTY = 0, FULL = 1, SLAB_BOTTOM = 2, SLAB_TOP = 3, STAIR_BOTTOM = 4, STAIR_TOP = 5;
     private static final String[] SIDES = {"north", "south", "west", "east"};
@@ -51,7 +52,7 @@ public final class Rasterizer {
         int x1 = (int) Math.floor(b[3] + 0.5), y1 = (int) Math.floor(b[4] + 0.5) + pad, z1 = (int) Math.floor(b[5] + 0.5);
         long volume = (long) Math.max(0, x1 - x0 + 1) * Math.max(0, y1 - y0 + 1) * Math.max(0, z1 - z0 + 1);
         long work = volume * s.cost() * (o.smooth ? 2L : 1L);
-        if (work > MAX_SAMPLES || (o.smooth && volume > MAX_SMOOTH_VOLUME)) {
+        if (work > MAX_SAMPLES || volume > MAX_VOLUME) {
             throw new IllegalArgumentException("shape is too large or complex to sample (" + volume + " cells x cost " + s.cost()
                     + "); split it into smaller shapes or use box() for large plain volumes");
         }

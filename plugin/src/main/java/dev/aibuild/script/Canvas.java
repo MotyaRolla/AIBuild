@@ -61,6 +61,51 @@ public final class Canvas {
     /** Writes the interior part made into other parts' walls, floors or stairs, which were skipped. */
     private int guarded;
     private String guardedAt;
+    /** Write rules per part name, from confine(): {@link #OTHERS} or {@link #ROOMS}. */
+    private final Map<String, String> confined = new HashMap<>();
+    /** The confined part being run (its full path), its rule, and the room boxes {x1,z1,x2,z2,y} for ROOMS. */
+    private String scopePath, scopeKind;
+    private List<int[]> scopeRooms = List.of();
+    private final Map<String, Confinement> confinements = new LinkedHashMap<>();
+
+    /** Named points and boxes of the build, in world coordinates, in the order they were set (the build sheet). */
+    private final Map<String, Anchor> anchors = new LinkedHashMap<>();
+    /** Intent lines per part path, from note(). */
+    private final Map<String, List<String>> notes = new LinkedHashMap<>();
+    static final int MAX_ANCHORS = 400, MAX_NOTES_PER_PART = 3, MAX_NOTE = 200;
+
+    /**
+     * A named point or box in world coordinates ({minX,minY,minZ,maxX,maxY,maxZ}; a point has min = max), set by
+     * mark() or by a kit ({@code auto}), with an optional note.
+     */
+    public record Anchor(String key, String part, int[] box, boolean point, String note, boolean auto) {
+        public String describe() {
+            String where = point ? "(" + box[0] + "," + box[1] + "," + box[2] + ")"
+                    : "box x " + box[0] + ".." + box[3] + ", y " + box[1] + ".." + box[4] + ", z " + box[2] + ".." + box[5];
+            return key + " " + where + (note.isEmpty() ? "" : " — " + note);
+        }
+    }
+
+    /** confine() rule: the part may not break blocks other parts placed before it. */
+    public static final String OTHERS = "others";
+    /** confine() rule: the part writes only inside the rooms that stand when it starts. */
+    public static final String ROOMS = "rooms";
+
+    /** What a confined part tried: its writes, the ones dropped, and a few of the dropped cells. */
+    public static final class Confinement {
+        public final String kind;
+        public int writes, dropped;
+        public final List<String> samples = new ArrayList<>();
+
+        Confinement(String kind) {
+            this.kind = kind;
+        }
+
+        /** The share of the part's writes that was dropped, 0 when it wrote nothing. */
+        public double droppedShare() {
+            return writes == 0 ? 0 : (double) dropped / writes;
+        }
+    }
 
     /** The part an interior designer furnishes in: it may fill rooms but not alter the building around them. */
     public static boolean interiorName(String name) {
@@ -121,6 +166,13 @@ public final class Canvas {
         partStack.push(full);
         partBounds.putIfAbsent(full, null);
         partCalls.merge(full, 1, Integer::sum);
+        String rule = scopePath == null ? confined.get(name) : null;
+        if (rule != null) {
+            scopePath = full;
+            scopeKind = rule;
+            scopeRooms = List.of();
+            confinements.computeIfAbsent(full, q -> new Confinement(rule));
+        }
         if (growing == null && (name.equals("tree") || name.endsWith("/tree"))) {
             growing = new Growth(partStack.size());
             trees.add(growing);
@@ -136,7 +188,114 @@ public final class Canvas {
                 warn("a tree at " + at(g) + " would grow into " + g.blockedBy + " (" + g.blocked + " blocks), so it was left out; plant trees in open ground");
             }
         }
+        if (!partStack.isEmpty() && partStack.peek().equals(scopePath)) scopePath = null;
         if (!partStack.isEmpty()) partStack.pop();
+    }
+
+    /**
+     * Puts a write rule on every call of the part named {@code name}: {@link #OTHERS} drops its writes that would
+     * break blocks other parts placed (their walls, floors, stairs, doors), {@link #ROOMS} drops its writes
+     * outside the rooms standing when it starts. A pipeline stage that rewrote one part sets the rule, so a few
+     * stray cells cost those cells instead of the whole rewrite.
+     */
+    public void confine(String name, String kind) {
+        if (!OTHERS.equals(kind) && !ROOMS.equals(kind)) throw new IllegalArgumentException("confine(): rule must be 'others' or 'rooms'");
+        confined.put(name, kind);
+    }
+
+    /** Records one line of intent for the current part (clipped; at most three per part, repeats ignored). */
+    public void note(String text) {
+        String t = text == null ? "" : text.strip().replaceAll("\\s+", " ");
+        if (t.isEmpty()) return;
+        if (t.length() > MAX_NOTE) t = t.substring(0, MAX_NOTE - 1) + "…";
+        List<String> list = notes.computeIfAbsent(currentPart(), q -> new ArrayList<>());
+        if (list.size() < MAX_NOTES_PER_PART && !list.contains(t)) list.add(t);
+    }
+
+    /**
+     * Records a named point (3 local coordinates) or box (6) of the current part in world coordinates. A kit's
+     * anchor ({@code auto}) is named "part.name" and numbered when the part has several ("keep.door2"); a script's
+     * own mark keeps its name, a later mark of the same name replacing it. Returns the stored name.
+     */
+    public String mark(String name, double[] c, String note, boolean auto) {
+        if (name == null || name.isBlank()) throw new IllegalArgumentException("mark(): the name must not be empty");
+        if (c.length != 3 && c.length != 6) throw new IllegalArgumentException("mark(): give x, y, z or [x1, y1, z1, x2, y2, z2]");
+        String part = currentPart();
+        String key = name.strip();
+        if (auto) {
+            String base = (NO_PART.equals(part) ? "" : part + ".") + key;
+            key = base;
+            for (int i = 2; anchors.containsKey(key); i++) key = base + i;
+        }
+        if (anchors.size() >= MAX_ANCHORS && !anchors.containsKey(key)) return key;
+        double[] p = frame.point(c[0], c[1], c[2]);
+        int[] box;
+        if (c.length == 3) {
+            int x = (int) Math.round(p[0]), y = (int) Math.round(p[1]), z = (int) Math.round(p[2]);
+            box = new int[]{x, y, z, x, y, z};
+        } else {
+            double[] q = frame.point(c[3], c[4], c[5]);
+            box = new int[]{(int) Math.round(Math.min(p[0], q[0])), (int) Math.round(Math.min(p[1], q[1])), (int) Math.round(Math.min(p[2], q[2])),
+                    (int) Math.round(Math.max(p[0], q[0])), (int) Math.round(Math.max(p[1], q[1])), (int) Math.round(Math.max(p[2], q[2]))};
+        }
+        String n = note == null ? "" : note.strip();
+        if (n.length() > MAX_NOTE) n = n.substring(0, MAX_NOTE - 1) + "…";
+        anchors.put(key, new Anchor(key, part, box, c.length == 3, n, auto));
+        return key;
+    }
+
+    /** The anchor of that name, or the first whose name ends in "/name" or ".name"; null when there is none. */
+    public Anchor anchor(String name) {
+        Anchor a = anchors.get(name);
+        if (a != null) return a;
+        for (Anchor b : anchors.values()) if (b.key().endsWith("/" + name) || b.key().endsWith("." + name)) return b;
+        return null;
+    }
+
+    public List<Anchor> anchors() {
+        return List.copyOf(anchors.values());
+    }
+
+    public Map<String, List<String>> notes() {
+        Map<String, List<String>> out = new LinkedHashMap<>();
+        notes.forEach((k, v) -> out.put(k, List.copyOf(v)));
+        return out;
+    }
+
+    /** Whether the part just started is confined to rooms and needs their boxes. */
+    public boolean confiningRooms() {
+        return scopePath != null && ROOMS.equals(scopeKind) && scopePath.equals(currentPart());
+    }
+
+    /** The room boxes {x1,z1,x2,z2,floorY} the current {@link #ROOMS} part may write in. */
+    public void scopeRooms(List<int[]> rooms) {
+        scopeRooms = List.copyOf(rooms);
+    }
+
+    /** What each confined part tried and what was dropped, by part path. */
+    public Map<String, Confinement> confinements() {
+        return Map.copyOf(confinements);
+    }
+
+    /** Whether a confined part's write would leave its scope (it is then dropped). */
+    private boolean outOfScope(long k, int x, int y, int z, BlockSpec old, BlockSpec spec) {
+        if (OTHERS.equals(scopeKind)) {
+            String o = owner.get(k);
+            if (o == null || o.equals(scopePath) || o.startsWith(scopePath + "/") || scopePath.startsWith(o + "/")) return false;
+            return BlockRoles.breaks(old, spec, info);
+        }
+        boolean same = old == null || old.isAir() ? spec == null || spec.isAir() : spec != null && old.name().equals(spec.name());
+        if (same) return false;
+        // the ring around a room counts for furniture: a bed or shelf against the wall hides the floor it stands on
+        int ring = !BlockRoles.structural(old, info) && !BlockRoles.structural(spec, info) ? 1 : 0;
+        for (int[] r : scopeRooms) {
+            if (x >= r[0] - ring && x <= r[2] + ring && z >= r[1] - ring && z <= r[3] + ring && y >= r[4] - 1 && y <= r[4] + 8) return false;
+        }
+        return true;
+    }
+
+    private static String nameOf(BlockSpec s) {
+        return s == null || s.isAir() ? "air" : s.name();
     }
 
     /**
@@ -185,6 +344,10 @@ public final class Canvas {
             String[] p = key.split("\\|", 3);
             warn("a building (" + p[0] + ", part " + p[1] + ") was cut through by " + p[2] + " (" + n + " blocks), which was built"
                     + " after it; move the building clear of " + p[2] + " or flush against its face");
+        });
+        confinements.forEach((p, t) -> {
+            if (t.dropped > 0) warn(t.dropped + " of " + t.writes + " writes by part " + p + " left its scope ("
+                    + (OTHERS.equals(t.kind) ? "blocks of other parts" : "outside the rooms") + ") and were skipped, e.g. " + String.join(", ", t.samples));
         });
         if (guarded > 0) warn(guarded + " interior writes into the building's walls, floors or stairs were skipped, e.g. " + guardedAt
                 + "; furnish inside rooms() only");
@@ -293,6 +456,20 @@ public final class Canvas {
         boolean isNew = !model.isSet(x, y, z);
         if (isNew && model.size() >= maxCells) {
             throw new ScriptBudgetException("the build exceeds " + maxCells + " cells; use fewer or smaller solid volumes (shell:1 for hollow masses)");
+        }
+        if (scopePath != null) {
+            String cur = currentPart();
+            if (cur.equals(scopePath) || cur.startsWith(scopePath + "/")) {
+                Confinement t = confinements.get(scopePath);
+                t.writes++;
+                BlockSpec old = model.get(x, y, z);
+                if (outOfScope(k, x, y, z, old, spec)) {
+                    t.dropped++;
+                    if (t.samples.size() < 6) t.samples.add("(" + x + "," + y + "," + z + ") " + nameOf(old)
+                            + (owner.containsKey(k) ? " of " + owner.get(k) : "") + " -> " + nameOf(spec));
+                    return;
+                }
+            }
         }
         if (fitting > 0) {
             BlockSpec old = model.get(x, y, z);

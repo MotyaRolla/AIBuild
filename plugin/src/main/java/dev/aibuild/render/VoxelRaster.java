@@ -140,6 +140,30 @@ public final class VoxelRaster {
         return look(pos, c, fov, w, h);
     }
 
+    /**
+     * Where a world point lands in the image: {px, py, depth along the view}, or null when it is behind a
+     * perspective camera. The inverse of the ray each pixel shoots.
+     */
+    public static double[] project(Camera c, double x, double y, double z) {
+        double[] v = {x - c.pos[0], y - c.pos[1], z - c.pos[2]};
+        double depth = dot(v, c.fwd);
+        double sx, sy;
+        if (c.ortho) {
+            sx = dot(v, c.right) / c.k;
+            sy = -dot(v, c.up) / c.k;
+        } else {
+            if (depth <= 1e-3) return null;
+            sx = dot(v, c.right) * c.k / depth;
+            sy = -dot(v, c.up) * c.k / depth;
+        }
+        return new double[]{sx + c.w / 2.0, sy + c.h / 2.0, depth};
+    }
+
+    /** Unit direction from a world point towards the camera. */
+    static double[] towardCamera(Camera c, double[] p) {
+        return c.ortho ? scale(c.fwd, -1) : norm(sub(c.pos, p));
+    }
+
     private static Camera orthoFit(int[] b, double[] d, int w, int h, double fill) {
         Camera probe = new Camera(true, new double[3], d, 1, w, h);
         double minU = Double.MAX_VALUE, maxU = -Double.MAX_VALUE, minV = Double.MAX_VALUE, maxV = -Double.MAX_VALUE;

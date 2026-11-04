@@ -39,6 +39,21 @@ public final class PluginConfig {
         return interiors.getOrDefault(mode, 0) > 0;
     }
 
+    /** Whether sculptors and the interior designer see what they built and may correct it once. */
+    public boolean selfCheck(String mode) {
+        return selfCheck.getOrDefault(mode, 0) > 0;
+    }
+
+    /** Studio: the wall clock of a new build in minutes, by mode. */
+    public int studioMinutes(String mode) {
+        return studioMinutes.getOrDefault(mode, 30);
+    }
+
+    /** Studio: parallel sessions for a new build (the blind judge picks between two or more), by mode. */
+    public int studioSessions(String mode) {
+        return studioSessions.getOrDefault(mode, 1);
+    }
+
     /** Parts rewritten in parallel by sculptor calls after the art director's review (0 = off). */
     public int sculptors(String mode) {
         return sculptors.getOrDefault(mode, 0);
@@ -84,6 +99,14 @@ public final class PluginConfig {
     /** Reasoning effort of the request enhancer. */
     public final String enhanceEffort;
     private final Map<String, Integer> interiors;
+    private final Map<String, Integer> selfCheck;
+    /** The create prompt asks the model to settle the layout in its thinking and write the script once. */
+    public final boolean writeOnce;
+    private final Map<String, Integer> studioMinutes;
+    private final Map<String, Integer> studioSessions;
+    /** Studio: minutes for an edit session, the turn fuse, helper sessions and their turns. */
+    public final int studioEditMinutes, studioMaxTurns, studioHelperTurns;
+    public final boolean studioDelegate;
     /** Reasoning effort of the lead designer's concept call. */
     public final String conceptEffort;
     /** Sculptors refine a part (keep its structure and kits, add craft) instead of redesigning it. */
@@ -159,7 +182,7 @@ public final class PluginConfig {
                     BuildMode.effort(c.getString("api.reasoning-effort.edit", std.effortEdit)),
                     Math.max(0, c.getInt("generation.verify-rounds", std.verifyRounds)),
                     Math.max(0, c.getInt("generation.edit-verify-rounds", std.editVerifyRounds)),
-                    Math.max(4000, Math.min(200000, c.getInt("api.max-tokens", std.maxTokens))),
+                    Math.max(4000, Math.min(dev.aibuild.ai.ChatRequest.MAX_TOKENS_LIMIT, c.getInt("api.max-tokens", std.maxTokens))),
                     c.getBoolean("generation.parallel-review", std.parallelReview));
             m.put(BuildMode.STANDARD, std);
         }
@@ -183,7 +206,7 @@ public final class PluginConfig {
         String es = c.getString("generation.edit-strategy", "plan").trim().toLowerCase(java.util.Locale.ROOT);
         editStrategy = es.equals("direct") || es.equals("steps") ? es : "plan";
         String cs = c.getString("generation.create-strategy", "script").trim().toLowerCase(java.util.Locale.ROOT);
-        createStrategy = cs.equals("staged") || cs.equals("compiled") ? cs : "script";
+        createStrategy = cs.equals("staged") || cs.equals("compiled") || cs.equals("studio") ? cs : "script";
         scriptRepairAttempts = Math.max(0, Math.min(5, c.getInt("script.repair-attempts", 3)));
         scriptFallback = c.getBoolean("script.fallback-to-ops", true);
         scriptCandidates = perMode(c, "script.candidates", Map.of("fast", 1, "light", 1, "standard", 2, "extra", 3), 1, 5);
@@ -193,6 +216,14 @@ public final class PluginConfig {
         sculptEffort = c.getString("script.sculpt-effort", "high");
         concepts = perMode(c, "script.concepts", Map.of("fast", 0, "light", 0, "standard", 1, "extra", 1), 0, 1);
         interiors = perMode(c, "script.interiors", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 1), 0, 1);
+        selfCheck = perMode(c, "script.self-check", Map.of("fast", 0, "light", 0, "standard", 1, "extra", 1), 0, 1);
+        writeOnce = c.getBoolean("script.write-once", true);
+        studioMinutes = perMode(c, "studio.minutes", Map.of("fast", 8, "light", 15, "standard", 30, "extra", 60), 2, 240);
+        studioSessions = perMode(c, "studio.sessions", Map.of("fast", 1, "light", 1, "standard", 1, "extra", 2), 1, 4);
+        studioEditMinutes = Math.clamp(c.getInt("studio.edit-minutes", 15), 2, 240);
+        studioMaxTurns = Math.clamp(c.getInt("studio.max-turns", 40), 2, 200);
+        studioHelperTurns = Math.clamp(c.getInt("studio.helper-turns", 12), 1, 60);
+        studioDelegate = c.getBoolean("studio.delegate", true);
         conceptEffort = BuildMode.effort(c.getString("script.concept-effort", "high"));
         enhance = perMode(c, "script.enhance", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 1), 0, 1);
         enhanceEffort = BuildMode.effort(c.getString("script.enhance-effort", "high"));

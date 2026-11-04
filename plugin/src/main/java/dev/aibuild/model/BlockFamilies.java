@@ -99,6 +99,15 @@ public final class BlockFamilies {
         List<String> r = new ArrayList<>();
         if (ROOTS.containsKey(n)) r.add(ROOTS.get(n));
         String base = n.startsWith("stripped_") ? n.substring(9) : n;
+        // a shaped block asked for another shape (stair('spruce_slab')): its family is the root's
+        for (String shaped : new String[]{"_stairs", "_slab", "_wall", "_fence"}) {
+            if (base.endsWith(shaped)) {
+                String root = base.substring(0, base.length() - shaped.length());
+                r.add(root);
+                r.addAll(roots(root.endsWith("_brick") || root.endsWith("_tile") ? root + "s" : root + "_planks"));
+                break;
+            }
+        }
         if (base.endsWith("_planks")) r.add(base.substring(0, base.length() - 7));
         else if (base.endsWith("_log") || base.endsWith("_wood")) r.add(base.substring(0, base.length() - 4));
         else if (base.endsWith("_stem") || base.endsWith("_hyphae")) r.add(base.substring(0, base.lastIndexOf('_')));

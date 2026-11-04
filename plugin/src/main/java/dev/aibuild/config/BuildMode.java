@@ -49,9 +49,9 @@ public final class BuildMode {
         m.put(LIGHT, new BuildMode(LIGHT, "Лёгкое думание", "~8–11 мин",
                 "off", "low", "off", "off", "low", 2, 1, 60000, true));
         m.put(STANDARD, new BuildMode(STANDARD, "Стандарт", "время зависит от сложности",
-                "max", "high", "low", "low", "low", 3, 1, 300000, false));
+                "max", "high", "low", "low", "low", 3, 1, 393216, false));
         m.put(EXTRA, new BuildMode(EXTRA, "Экстра-думание", "время зависит от сложности",
-                "max", "max", "high", "low", "high", 3, 2, 300000, true));
+                "max", "max", "high", "low", "high", 3, 2, 393216, true));
         return m;
     }
 
@@ -68,7 +68,7 @@ public final class BuildMode {
                 effort(s.getString("edit", d.effortEdit)),
                 Math.max(0, s.getInt("verify-rounds", d.verifyRounds)),
                 Math.max(0, s.getInt("edit-verify-rounds", d.editVerifyRounds)),
-                Math.max(4000, Math.min(384000, s.getInt("max-tokens", d.maxTokens))),
+                Math.max(4000, Math.min(dev.aibuild.ai.ChatRequest.MAX_TOKENS_LIMIT, s.getInt("max-tokens", d.maxTokens))),
                 s.getBoolean("parallel-review", d.parallelReview));
     }
 

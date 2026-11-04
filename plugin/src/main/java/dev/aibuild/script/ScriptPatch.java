@@ -160,7 +160,21 @@ public final class ScriptPatch {
         return new Result(base + code.substring(mine[0], mine[1]) + "\n", null, 1, false);
     }
 
-        /** The source text of one part() statement, or null. */
+    private static final java.util.regex.Pattern OWN_CONFINE =
+            java.util.regex.Pattern.compile("\\b(?:function|var|let|const)\\s+confine\\b|\\bconfine\\s*=");
+
+    /**
+     * The script with the rule {@code confine('name', rule)} as its first line, so every run of it skips the part's
+     * out-of-scope writes the same way (see {@code Canvas.confine}). Unchanged when the rule is already there, or
+     * when the script defines its own {@code confine}, which would shadow the library's.
+     */
+    public static String confine(String source, String name, String rule) {
+        String line = "confine('" + name.replace("\\", "\\\\").replace("'", "\\'") + "', '" + rule + "');";
+        if (source.contains(line) || OWN_CONFINE.matcher(source).find()) return source;
+        return line + "\n" + source;
+    }
+
+    /** The source text of one part() statement, or null. */
     public static String partSource(String source, String name) {
         int[] at = ScriptLint.partSpan(source, name);
         return at == null ? null : source.substring(at[0], at[1]);
