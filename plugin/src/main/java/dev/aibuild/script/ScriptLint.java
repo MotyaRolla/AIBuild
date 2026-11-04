@@ -141,6 +141,32 @@ public final class ScriptLint {
      * Source span {start, end} of the statement {@code part('name', ...)} (with its trailing semicolon), or null
      * when the script has no such call. Brackets inside strings, comments and regexes are ignored.
      */
+    /** A top-level part() statement of a script: its name and {start, end} offsets. */
+    public record PartStatement(String name, int start, int end) {
+    }
+
+    /**
+     * The part() statements of {@code source} that no other part() encloses, in order. Null when a part() call is
+     * unbalanced (the code does not parse as statements).
+     */
+    public static java.util.List<PartStatement> topLevelParts(String source) {
+        java.util.List<PartStatement> out = new java.util.ArrayList<>();
+        Matcher m = PART_NAME.matcher(source);
+        int reach = -1;
+        while (m.find()) {
+            if (m.start() < reach || inCommentOrString(source, m.start())) continue;
+            int open = source.indexOf('(', m.start());
+            int end = matchParen(source, open);
+            if (end < 0) return null;
+            int j = end;
+            while (j < source.length() && (source.charAt(j) == ' ' || source.charAt(j) == '\t')) j++;
+            if (j < source.length() && source.charAt(j) == ';') end = j + 1;
+            out.add(new PartStatement(m.group(1), m.start(), end));
+            reach = end;
+        }
+        return out;
+    }
+
     public static int[] partSpan(String source, String name) {
         Matcher m = PART_NAME.matcher(source);
         while (m.find()) {

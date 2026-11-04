@@ -32,6 +32,7 @@ public final class Handbook {
         TOPICS.put("interiors", "rooms with a purpose, walking space, furniture from blocks, light");
         TOPICS.put("organic", "statues and creatures: armature, proportions, pose, shading, rocks");
         TOPICS.put("review", "how a professional checks a build: views, typical faults, when to stop");
+        TOPICS.put("examples", "three complete example scripts (a cottage, a bridge, a fox): style reference, do not copy");
     }
 
     private Handbook() {
@@ -48,6 +49,12 @@ public final class Handbook {
     public static String chapter(Stdlib lib, String topic) {
         String t = topic == null ? "" : topic.strip().toLowerCase(Locale.ROOT);
         if (!TOPICS.containsKey(t)) return null;
+        if (t.equals("examples")) {
+            // the example scripts, on demand instead of in every request
+            StringBuilder sb = new StringBuilder("# HANDBOOK: examples (style reference only; do not copy)\n");
+            for (String name : lib.examples()) sb.append("## Example: ").append(name).append("\n```js\n").append(lib.example(name)).append("```\n");
+            return sb.toString().strip();
+        }
         String text = lib.optional("handbook/" + t + ".md");
         return text == null ? null : text.strip();
     }

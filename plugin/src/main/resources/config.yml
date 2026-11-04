@@ -149,6 +149,16 @@ studio:
     light: 1
     standard: 1
     extra: 2
+  # first drafts written in parallel for a new build; a blind tournament (each pair judged in both orders) picks
+  # the one the session builds on. The first design sets the ceiling; parallel drafts cost tokens, not wall time
+  first-drafts:
+    fast: 1
+    light: 1
+    standard: 2
+    extra: 3
+  # big changes (a rewrite, a large region, a measured regression) are judged blind in both orders; when both
+  # judgments prefer the version before, it stays current (the AI can still REVERT to its change)
+  verify: true
   edit-minutes: 15           # an /aib edit session on a studio build
   max-turns: 40              # a fuse against a session that loops, not a budget
   delegate: true             # the AI may hand parts to helper sessions running in parallel

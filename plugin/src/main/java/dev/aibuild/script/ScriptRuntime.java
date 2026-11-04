@@ -298,6 +298,22 @@ public final class ScriptRuntime {
                 return materials.get(id);
             }
             if (m == null || Undefined.isUndefined(m)) throw new IllegalArgumentException("missing block/material argument");
+            if (m instanceof Scriptable o && !(m instanceof org.mozilla.javascript.NativeArray) && !(m instanceof org.mozilla.javascript.Function)) {
+                // {stone: 3, andesite: 1} where mix({...}) was meant: the weights say what it is
+                List<Material> of = new ArrayList<>();
+                List<Double> w = new ArrayList<>();
+                for (Object id : o.getIds()) {
+                    if (!(id instanceof String k)) continue;
+                    Object v = o.get(k, o);
+                    if (!(v instanceof Number n) || !(n.doubleValue() > 0)) continue;
+                    of.add(material(k));
+                    w.add(n.doubleValue());
+                }
+                if (!of.isEmpty()) {
+                    canvas.warn("auto-corrected: a {block: weight} object given as a material was read as mix({...})");
+                    return of.size() == 1 ? of.getFirst() : new Material.Mix(of, w.stream().mapToDouble(Double::doubleValue).toArray(), 3, noise);
+                }
+            }
             throw new IllegalArgumentException("material must be a block name like 'stone_bricks' or a material from mix()/grad()/...");
         }
 
@@ -497,6 +513,9 @@ public final class ScriptRuntime {
             double scale = a.length > 3 ? Math.max(1e-3, num(a[3])) : 8;
             return run.noise.fbm(num(a[0]) / scale, num(a[1]) / scale, num(a[2]) / scale);
         });
+        // positional randomness: the same cell always draws the same number, so an edit elsewhere never reshuffles it
+        fn(scope, "__hash", 4, (c, s, a) -> Noise.hash(run.seed, (int) Math.floor(num(a[0])), (int) Math.floor(num(a[1])),
+                (int) Math.floor(num(a[2])), a.length > 3 ? (int) num(a[3]) : 0));
         fn(scope, "__log", 1, (c, s, a) -> {
             String msg = a.length == 0 ? "" : Context.toString(a[0]);
             if (run.logChars < 4000) {
@@ -838,16 +857,46 @@ public final class ScriptRuntime {
                 for (Object m : list(get(o, "of"))) opts.add(run.material(m));
                 double[] w = nums(get(o, "w"));
                 if (opts.isEmpty() || w.length != opts.size()) throw new IllegalArgumentException("mix() needs {block: weight, ...}");
-                for (double v : w) if (!(v > 0)) throw new IllegalArgumentException("mix() weights must be positive");
+                // a weight of 0 (a block written in to be tried later) is that block left out, not a failed run
+                List<Material> keep = new ArrayList<>();
+                List<Double> kw = new ArrayList<>();
+                for (int i = 0; i < w.length; i++) {
+                    if (w[i] > 0 && Double.isFinite(w[i])) {
+                        keep.add(opts.get(i));
+                        kw.add(w[i]);
+                    }
+                }
+                if (keep.size() < opts.size()) {
+                    run.canvas.warn("auto-corrected: mix() entries with a weight of 0 or less (or not a number) were left out");
+                }
+                if (keep.isEmpty()) throw new IllegalArgumentException("mix() needs at least one weight above 0");
+                double[] ww = kw.stream().mapToDouble(Double::doubleValue).toArray();
                 double scale = has(o, "scale") ? num(get(o, "scale")) : 3;
-                yield new Material.Mix(opts, w, scale, run.noise);
+                yield keep.size() == 1 ? keep.getFirst() : new Material.Mix(keep, ww, scale, run.noise);
             }
             case "grad" -> {
                 List<Material> mats = new ArrayList<>();
                 for (Object m : list(get(o, "of"))) mats.add(run.material(m));
                 double[] stops = nums(get(o, "stops"));
                 if (mats.size() < 2 || stops.length != mats.size()) throw new IllegalArgumentException("grad() needs 2+ stops [[t, block], ...]");
-                for (int i = 1; i < stops.length; i++) if (stops[i] < stops[i - 1]) throw new IllegalArgumentException("grad() stops must increase");
+                boolean sorted = true;
+                for (int i = 1; i < stops.length; i++) if (stops[i] < stops[i - 1]) sorted = false;
+                if (!sorted) {
+                    // stops out of order: the order is clear from their values, so sort them with their blocks
+                    Integer[] idx = new Integer[stops.length];
+                    for (int i = 0; i < idx.length; i++) idx[i] = i;
+                    double[] st = stops;
+                    java.util.Arrays.sort(idx, (a, b2) -> Double.compare(st[a], st[b2]));
+                    double[] ns = new double[st.length];
+                    List<Material> nm = new ArrayList<>();
+                    for (int i = 0; i < idx.length; i++) {
+                        ns[i] = st[idx[i]];
+                        nm.add(mats.get(idx[i]));
+                    }
+                    stops = ns;
+                    mats = nm;
+                    run.canvas.warn("auto-corrected: grad() stops were out of order and were sorted by their t");
+                }
                 double from = has(o, "from") ? num(get(o, "from")) : Double.NaN, to = has(o, "to") ? num(get(o, "to")) : Double.NaN;
                 yield new Material.Gradient(axisChar(get(o, "axis"), 'y'), stops, mats, from, to, run.noise);
             }

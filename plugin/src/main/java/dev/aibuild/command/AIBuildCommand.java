@@ -541,7 +541,8 @@ public final class AIBuildCommand implements BasicCommand {
             String prompt = String.join(" ", a).trim();
             if (prompt.isEmpty()) throw new IllegalArgumentException("Нужен промпт.");
             id = plugin.pipeline().startCreateBench(prompt, mode, va, vb);
-            Msg.send(s, "<gray>Бенчмарк создания <white><v0></white> (режим <v1>): <v2> и <v3> параллельно, рендеры для слепого сравнения.</gray>", id, mode.title, va, vb);
+            String what = va.equals("none") ? "только " + vb : va + " и " + vb + " параллельно, рендеры для слепого сравнения";
+            Msg.send(s, "<gray>Бенчмарк создания <white><v0></white> (режим <v1>): <v2>. Смотреть: /aib watch <v0></gray>", id, mode.title, what);
         } else if (kind.equals("suite")) {
             int n = plugin.pipeline().startBenchSuite(mode, va, vb, repeat);
             Msg.send(s, "<gray>Набор бенчмарков (режим <v0>): <v1> запросов по очереди, <v2> против <v3>. Папки появятся в plugins/AIBuild/bench/.</gray>",
@@ -620,7 +621,24 @@ public final class AIBuildCommand implements BasicCommand {
     private void watch(CommandSender s, String[] args) {
         Job job;
         if (args.length > 0) {
-            Build b = plugin.store().get(args[0]);
+            String id = args[0].strip();
+            // a bench is not a stored build: watch its variants, "900edd" or "bench-900edd"
+            String benchId = id.startsWith("bench-") ? id : "bench-" + id;
+            Job bench = plugin.pipeline().jobFor(benchId);
+            if (bench != null && bench.kind == Job.Kind.BENCH) {
+                if (s instanceof Player && !s.hasPermission("aibuild.admin")) throw new IllegalStateException("Нет прав.");
+                var links = plugin.pipeline().benchLinks(benchId);
+                String base = plugin.liveServer() == null ? null : plugin.liveServer().publicBaseUrl();
+                if (links.isEmpty() || base == null) {
+                    Msg.send(s, "<yellow>У бенчмарка <white><v0></white> пока нет живых ссылок" + (base == null ? " (сервер просмотра не запущен)" : "") + ".</yellow>", benchId);
+                    return;
+                }
+                for (var e : links.entrySet()) {
+                    s.sendMessage(Msg.link("<gray>" + Msg.escape(e.getKey()) + ": </gray>", base + "/live/" + e.getValue().token() + "/"));
+                }
+                return;
+            }
+            Build b = plugin.store().get(id);
             job = b == null ? null : plugin.pipeline().jobFor(b.id);
         } else if (s instanceof Player p) {
             String active = plugin.store().getActive(p.getUniqueId());

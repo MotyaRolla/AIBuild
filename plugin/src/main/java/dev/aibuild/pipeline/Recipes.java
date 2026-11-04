@@ -21,7 +21,7 @@ public final class Recipes {
     private static final Map<String, List<String>> KEYS = new LinkedHashMap<>();
 
     static {
-        KEYS.put("asian", List.of("пагод", "японск", "китайск", "храм", "тории", "сакур", "pagoda", "japan", "chinese",
+        KEYS.put("asian", List.of("пагод", "японск", "китайск", "храм", "тории", "pagoda", "japan", "chinese",
                 "temple", "torii", "shrine", "dojo"));
         KEYS.put("ship", List.of("корабл", "лодк", "судно", "фрегат", "дирижабл", "парусн", "поезд", "паровоз", "машин",
                 "автомоб", "танк", "самолет", "самолёт", "ракет", "ship", "boat", "galleon", "airship", "zeppelin", "train",
@@ -38,8 +38,12 @@ public final class Recipes {
         KEYS.put("bridge", List.of("мост", "акведук", "виадук", "причал", "пирс", "bridge", "aqueduct", "viaduct", "pier", "dock"));
         KEYS.put("scene", List.of("деревн", "город", "посёл", "посел", "сцен", "пейзаж", "остров", "улиц", "площад", "рынок",
                 "village", "town", "city", "scene", "landscape", "island", "street", "square", "market"));
-        KEYS.put("nature", List.of("дерев", "лес", "сад", "парк", "роща", "дуб", "ель", "сосн", "ива",
-                "tree", "forest", "garden", "park", "grove", "oak", "pine", "willow", "treehouse"));
+        // a sakura is a tree: it gets the tree card, not the temple one (a request for one tree by a lake is not a
+        // request for a pagoda); japanese buildings still match "японск"/"japan"
+        KEYS.put("nature", List.of("дерев", "лес", "сад", "парк", "роща", "дуб", "ель", "сосн", "ива", "сакур", "вишн", "клён",
+                "клен", "берёз", "берез", "озер", "озёр", "пруд", "рек", "водопад", "ручей", "tree", "forest", "garden", "park",
+                "grove", "oak", "pine", "willow", "treehouse", "sakura", "cherry", "maple", "birch", "lake", "pond", "river",
+                "waterfall", "stream"));
         KEYS.put("house", List.of("дом", "избу", "изба", "хижин", "коттедж", "таверн", "трактир", "лавк", "магазин", "ферм",
                 "мельниц", "кузниц", "особняк", "вилл", "усадьб", "здани", "церк", "часовн", "house", "home", "cottage",
                 "cabin", "hut", "tavern", "inn", "shop", "farm", "mill", "smithy", "mansion", "villa", "manor", "building",
@@ -92,6 +96,7 @@ public final class Recipes {
             case "дом" -> word.startsWith("домин");
             case "car" -> !word.equals("car") && !word.equals("cars");
             case "лис" -> word.startsWith("лист");
+            case "рек" -> word.startsWith("реком") || word.startsWith("рекл") || word.startsWith("рекорд") || word.startsWith("рект");
             default -> false;
         };
     }
@@ -101,7 +106,10 @@ public final class Recipes {
         StringBuilder sb = new StringBuilder();
         for (String name : pick(request)) {
             String card = lib.optional("recipes/" + name + ".md");
-            if (card != null) sb.append(card.strip()).append("\n\n");
+            if (card == null) continue;
+            if (sb.isEmpty()) sb.append("IDEAS FROM SIMILAR BUILDS (take only what serves THIS request; nothing below is required,"
+                    + " and adding subjects the request did not ask for dilutes it):\n");
+            sb.append(card.strip()).append("\n\n");
         }
         return sb.toString().strip();
     }

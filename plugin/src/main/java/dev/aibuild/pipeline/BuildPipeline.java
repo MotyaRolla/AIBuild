@@ -235,13 +235,25 @@ public final class BuildPipeline {
     /** The live session of a running job, or {@link LiveBroadcast#NOOP} when the build has no viewer. */
     private LiveBroadcast live(Job job) {
         LiveSession.Registry r = liveLinks;
-        if (r == null || job == null || job.quiet) return LiveBroadcast.NOOP;
+        // quiet jobs too: a bench variant has a link of its own (its id never matches a build's)
+        if (r == null || job == null) return LiveBroadcast.NOOP;
         LiveSession s = r.forBuild(job.buildId);
         return s == null ? LiveBroadcast.NOOP : s;
     }
 
     public Job jobFor(String buildId) {
         return jobsByBuild.get(buildId);
+    }
+
+    /** The live links of a running bench's variants, by variant name. */
+    public java.util.Map<String, LiveSession> benchLinks(String benchId) {
+        java.util.Map<String, LiveSession> out = new java.util.TreeMap<>();
+        LiveSession.Registry r = liveLinks;
+        if (r != null) for (String v : BENCH_VARIANTS) {
+            LiveSession s = r.forBuild(benchId + "/" + v.replace('+', '-'));
+            if (s != null) out.put(v, s);
+        }
+        return out;
     }
 
     public Job jobOf(UUID owner) {
@@ -548,7 +560,7 @@ public final class BuildPipeline {
         int minutes = c.studioMinutes(job.mode.id);
         boolean eyes = vision(job, tr);
         String system = ScriptPrompts.studioSystem(job.stdlib, c.includeBlockList ? blockList.get() : null);
-        String start = ScriptPrompts.studioStart(job.stdlib, prompt, scaleHint(job.mode, job.stdlib), minutes, c.studioDelegate);
+        String start = ScriptPrompts.studioStart(job.stdlib, prompt, studioScaleHint(job.mode), minutes, c.studioDelegate);
         long deadline = System.nanoTime() + java.util.concurrent.TimeUnit.MINUTES.toNanos(minutes);
         int n = Math.max(1, c.studioSessions(job.mode.id));
         if (n > 1) say(job, "<gray>ИИ строит в <v0> независимых студиях, лучший результат выберет слепое сравнение.</gray>", n);
@@ -565,6 +577,8 @@ public final class BuildPipeline {
             s.eyes = eyes;
             s.delegate = c.studioDelegate;
             s.helperTurns = c.studioHelperTurns;
+            s.verify = c.studioVerify;
+            s.firstDrafts = c.studioFirstDrafts(job.mode.id);
             s.tag = n == 1 ? "studio" : "studio-s" + (i + 1);
             StudioSession.Host host = studioHost(job, tr, build, i == 0 ? anchor : null, Prompts.userWords(prompt), i == 0);
             StudioSession session = new StudioSession(host, info, runtime, sSeed, safety, budget, s, system, start, prompt);
@@ -577,6 +591,7 @@ public final class BuildPipeline {
             try {
                 StudioSession.Outcome o = await(futures.get(i), job);
                 tr.note("studio session " + (i + 1), "turns=" + o.turns() + " versions=" + o.versions().size() + " done=" + o.done()
+                        + " blind checks=" + o.checks() + " kept the version before=" + o.rejected()
                         + " reason=" + o.reason() + (o.shipped() == null ? "" : " shipped=v" + o.shipped().n()) + "\n" + o.diagnosis());
                 if (o.shipped() != null) {
                     outcomes.add(o);
@@ -646,6 +661,7 @@ public final class BuildPipeline {
         v.reviewerCalls = o.turns();
         v.issuesFixed = Math.max(0, o.versions().size() - 1);
         v.checklist = "studio: " + o.turns() + " turns, " + o.versions().size() + " versions, shipped v" + o.shipped().n()
+                + ", blind checks " + o.checks() + " (kept the version before: " + o.rejected() + ")"
                 + (o.done() ? "" : " (" + o.reason() + ")");
         v.finalReport = rep;
         // the model decides when it is done; the analyzer's blocking findings stay visible as information
@@ -660,7 +676,17 @@ public final class BuildPipeline {
         return new StudioSession.Host() {
             @Override
             public String call(List<ChatMessage> msgs, String tag) throws Exception {
-                return callText(job, tr, tag, job.mode.effortBuild, msgs, lead && !tag.contains("-d") ? codeStream(job, "program") : null, null);
+                // the first draft is the design every later turn builds on: it thinks at the mode's plan effort
+                // (max in standard and extra); later turns are edits and checks at the build effort
+                boolean design = tag.endsWith("-t1") || tag.contains("-t1x");
+                String effort = design && job.mode.effortPlan != null && !"off".equals(job.mode.effortPlan) ? job.mode.effortPlan : job.mode.effortBuild;
+                return callText(job, tr, tag, effort, msgs, lead && !tag.contains("-d") && !tag.contains("-t1x") && !tag.contains("-t1fix")
+                        ? codeStream(job, "program") : null, null);
+            }
+
+            @Override
+            public String judge(List<ChatMessage> msgs, String tag) throws Exception {
+                return callText(job, tr, tag, job.mode.effortReview, msgs, null, null);
             }
 
             @Override
@@ -2028,6 +2054,7 @@ public final class BuildPipeline {
         s.eyes = vision(job, tr);
         s.delegate = c.studioDelegate;
         s.helperTurns = c.studioHelperTurns;
+        s.verify = c.studioVerify;
         s.tag = "studio-edit";
         String system = ScriptPrompts.studioSystem(job.stdlib, c.includeBlockList ? blockList.get() : null);
         String start = ScriptPrompts.studioEdit(original, change, c.studioEditMinutes);
@@ -2232,6 +2259,21 @@ public final class BuildPipeline {
         plan.add("plot", plot);
         plan.addProperty("request", prompt);
         return plan;
+    }
+
+    /**
+     * Size guidance for a studio session. No block-count target: a count invites filler (a forest belt "to use the
+     * plot"), and judges compare what the eye goes to. The subject sets the size; detail goes where it is seen.
+     */
+    static String studioScaleHint(BuildMode mode) {
+        String size = "Size it to the subject and the request (1 block = 1 m): a request that says huge or giant gets a"
+                + " build that reads as huge next to a player.";
+        return switch (mode.id) {
+            case BuildMode.FAST -> size + " Keep it complete but compact.";
+            case BuildMode.EXTRA -> size + " This is a showcase: spend detail generously on the subject and what frames it.";
+            default -> size + " Make it rich and complete.";
+        } + " Put the blocks into the subject and what frames it, not into filler around it: a busier or bigger build is"
+                + " not a better one.";
     }
 
     /** Block-count guidance for the script prompt, by thinking mode. */
@@ -3281,6 +3323,18 @@ public final class BuildPipeline {
         Transcript tr = new Transcript(benchId + "/" + name.replace('+', '-'), true);
         VoxelModel model = start.copy();
         long t0 = System.currentTimeMillis();
+        // each variant gets its own live link, so a bench can be watched as it runs (/aib watch <bench id>)
+        LiveSession.Registry links = liveLinks;
+        LiveSession session = null;
+        if (links != null) {
+            try {
+                session = links.open(child, benchId + " · " + name, "bench", info);
+                child.live = session;
+            } catch (RuntimeException e) {
+                plugin.getLogger().log(Level.WARNING, "live view could not be opened for " + child.buildId, e);
+            }
+        }
+        String outcome = "done";
         try {
             Verdict v = body.run(child, tr, model);
             vr.rounds = v.rounds;
@@ -3289,7 +3343,13 @@ public final class BuildPipeline {
             vr.checklist = v.checklist;
         } catch (Exception e) {
             vr.error = shortError(e);
+            outcome = child.cancelled.get() ? "cancelled" : "failed";
             plugin.getLogger().log(Level.WARNING, "bench variant " + name + " failed", e);
+        } finally {
+            if (session != null) {
+                if (model.nonAirCount() > 0) session.model(model, "final");
+                session.finish(outcome, vr.error != null ? vr.error : model.nonAirCount() + " blocks");
+            }
         }
         vr.seconds = (System.currentTimeMillis() - t0) / 1000;
         vr.calls = child.calls.get();
@@ -3810,6 +3870,16 @@ public final class BuildPipeline {
                     .field("answer", res.content());
             boolean truncated = "length".equals(res.finishReason());
             boolean empty = res.content() == null || res.content().isBlank();
+            if (!empty && !truncated && attempt == 0 && skippedThinking(eff, res, think)) {
+                // the gateway sometimes answers a max request without thinking at all: a substantial answer with no
+                // reasoning is the model's worst work, so it is asked once more at high, which thinks reliably
+                tb.status(TraceStep.Status.FAILED).summary("answered at " + eff + " without any reasoning; asking again at high");
+                traceDone(job, tb);
+                plugin.getLogger().warning("[" + tag + "] effort " + eff + " came back with no reasoning (" + res.completionTokens()
+                        + " tokens), retrying at high");
+                eff = "high";
+                continue;
+            }
             if (!empty && !truncated) {
                 tb.status(TraceStep.Status.OK).summary(summarise(res.content(), "chars", res.elapsedMs()));
                 traceDone(job, tb);
@@ -3837,6 +3907,13 @@ public final class BuildPipeline {
             }
         }
         throw new IllegalStateException("модель не вернула программу: " + lastErr);
+    }
+
+    /** A max-effort answer of real length that came back with no reasoning at all (short answers may skip it). */
+    static boolean skippedThinking(String effort, ChatResult res, CharSequence streamedReasoning) {
+        if (!"max".equals(effort) || res.completionTokens() < 400) return false;
+        boolean noText = (res.reasoning() == null || res.reasoning().isBlank()) && (streamedReasoning == null || streamedReasoning.isEmpty());
+        return res.reasoningTokens() == 0 && noText;
     }
 
     private JsonObject callJson(Job job, Transcript tr, String tag, String effort, String userMsg) throws Exception {

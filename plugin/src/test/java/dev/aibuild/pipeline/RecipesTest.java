@@ -26,6 +26,10 @@ class RecipesTest {
         assertEquals("scene", Recipes.pick("маленькая деревня из трёх домов вокруг колодца").getFirst());
         assertEquals(List.of("general"), Recipes.pick("что-нибудь красивое"));
         assertFalse(Recipes.pick("дом, который стоит у озера").contains("creature"), "'который' is not a cat");
+        assertEquals(List.of("nature"), Recipes.pick("Огромная проработанная сакура с озером вокруг"), "a sakura is a tree");
+        assertEquals("asian", Recipes.pick("японский храм с сакурой").getFirst(), "a japanese building is still asian");
+        assertFalse(Recipes.pick("рекомендую красивый дом").contains("nature"), "'рекомендую' is not a river");
+        assertTrue(Recipes.forRequest(Stdlib.V2, "дуб").startsWith("IDEAS FROM SIMILAR BUILDS"), "recipes are offered as ideas");
     }
 
     @Test void everyBenchPromptGetsASpecificCard() throws IOException {

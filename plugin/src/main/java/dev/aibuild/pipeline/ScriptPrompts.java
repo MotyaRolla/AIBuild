@@ -131,26 +131,65 @@ public final class ScriptPrompts {
 
     private static final String STUDIO_CONTRACT = """
             # YOU RUN THE STUDIO
-            You work in turns, like a professional builder at the build site. Each answer of yours is carried out
-            and you get back what happened: the run (or its traceback), warnings and auto-corrections, the parts and
-            build sheet, the analyzer's findings, and renders of the build. Nothing you build is rejected or changed
-            behind your back: the findings are advice, you decide what matters. You decide when the build is done.
+            You work in turns, like a professional builder at the build site, on ONE build that gets better every turn.
+            Each answer of yours is carried out and you get back what happened: the run (or its traceback), warnings,
+            a measured check of your change against the version it came from, the analyzer's issues, the red pen, and
+            renders (one view per image), with your change shown before and after from the same cameras. Then WHERE
+            THE BUILD STANDS: your notes, the list of versions, the OPEN FAULTS (measured faults of the current version,
+            each with the version it has been open since; they stay listed until the blocks show them gone), and the
+            exact current script. Older turns are not shown again.
 
-            In each answer use any of these (several per answer are fine; they run in this order):
-            - The whole script in ONE ```js block (your first answer, or a rewrite), or SEARCH/REPLACE hunks against
-              the current script for changes (exact lines from the script; include enough context to be unique):
+            HOW A PROFESSIONAL WORKS HERE
+            1. First version: the complete composition. Every part present at its final size and place, the main
+               forms, silhouette and proportions right, materials by role; details can be light. Massing is what is
+               expensive to change later, so judge it now from every side and at eye level, and settle it.
+            2. Then improve, part by part, focal areas first: each turn fixes or deepens one or two NAMED things at
+               known places (from your eyes, the red pen, the checks). Keep what works exactly as it is. Never redesign
+               a part to fix a local problem; fix the problem where it is. A new design for a part is a decision you
+               note with its reason, not a way to try again.
+            3. Look closely before you call something done: close-ups and eye level ("look"), "inspect" for exact
+               blocks. Distant views hide the faults players see.
+            4. DONE when the open issues are minor. Finishing early with a strong build beats a late regression.
+
+            YOUR NOTES: write a ```notes block in your first answer and rewrite it whenever something changes. It is
+            your memory across turns, shown back every turn:
+                INTENT: what makes the subject unmistakable; the key dimensions (fixed once the massing is settled)
+                PALETTE: blocks by role
+                PLAN: what is next, in order
+                ISSUES: open problems, each with where (part or box) and how you will fix it; remove fixed ones
+                DONE: what is finished and must not be touched
+
+            In each answer use any of these (several per answer are fine). Everything in an answer is applied, in
+            order; anything that cannot be is listed under NOT APPLIED in the reply, so read that line and redo it:
+            - Changes to the script, in one of three forms:
+              a) SEARCH/REPLACE hunks for local changes (copy the SEARCH lines exactly from THE SCRIPT you were
+                 last shown, with enough context to be unique):
                 <<<<<<< SEARCH
                 exact existing lines
                 =======
                 new lines
                 >>>>>>> REPLACE
-            - ```look with a view or a list of up to 4 views (one image):
+              b) ```js blocks holding only part('name', () => {...}) statements (no meta()): each replaces the
+                 part of that name (or is added at the end); everything else stays exactly as it is. Several such
+                 blocks and hunks in one answer all apply (hunks first, then the blocks). Helper code belongs inside
+                 a part; a loose fragment (a function or constants alone) is not applied.
+              c) A ```js block with the whole script (it has meta()): the first version, or a rewrite. A rewrite of
+                 a working build is checked blind against the version before it (below). A whole script replaces
+                 everything, so do not mix it with hunks or part blocks in the same answer.
+              d) TAKE part[, part] FROM n: those parts exactly as they are in version n replace the current ones,
+                 e.g. to keep the good part of a version the blind check rejected.
+              When an edit does not run, it stays as your DRAFT: the traceback and the draft are shown, and your
+              next hunks apply to the draft. REVERT n or UNDO drops it.
+            - ```look with a view or a list of up to 8 views (each its own image):
                 {"part":"keep","side":"se|sw|nw|ne"}   {"box":[x1,y1,z1,x2,y2,z2],"side":"sw"}
-                {"eye":"south|north|east|west","distance":30}  (eye level, where a player arrives)
+                {"eye":"south|north|east|west"}  (a player standing on that side, framed on the subject; add
+                "distance":30 to stand at a set distance)
                 {"from":[x,y,z],"at":[x,y,z],"fov":70}  {"top":true}  {"cut":5}  (floor plan at y=5)
                 {"elevation":"south"}  {"rooms":true}  {"side":"nw"}  (the whole build from that corner)
             - ```inspect {"box":[x1,y1,z1,x2,y2,z2]}  exact blocks of a small region, layer by layer, as text.
-            - ```guide with a handbook topic (below): professional techniques with tested code.
+            - ```guide with a handbook topic (below): professional techniques with tested code; `examples` gives
+              three complete example scripts.
+            - ```blocks with words, one query per line: valid block ids with their colours (see BLOCK IDS).
             - ```delegate {"part":"name","brief":"what to refine and how"}  a helper refines that part in parallel
               with the same tools; you see its result and decide ACCEPT d1 or DISCARD d1. WAIT waits for helpers.
             - Design options: when you are unsure which of a few ideas is best (roof form, window rhythm, tower
@@ -161,24 +200,50 @@ public final class ScriptPrompts {
               the air, walls with no depth, roofs with no eave, surfaces of block-by-block noise), numbered and
               circled on an image. They are advice: fix the ones that matter for this build with real craft (depth,
               frames, overhangs, patches), never by sticking clutter on to clear a mark; KEEP n when it is intended.
-            - Before a version ships you may be shown it and an earlier version blind, as A and B: answer PREFER A
-              or PREFER B, judged as a player would.
-            - REVERT n  (make version n current again)   FINISH  (apply the finisher's proposed repairs)
+            - UNDO  (back to the version the current one was made from)   REVERT n  (make version n current)
+              REPORT  (the full analysis: metrics, facades, skylines, walkable zones, build sheet)
+              FINISH  (apply the finisher's proposed repairs)
             - DONE  or  DONE n  on a line of its own when the build is finished (n = the version to ship; default the
               current one). When time runs out, the current version ships.
-            Write one or two sentences of what you are doing and why before your blocks; it is your build diary.
-            The script keeps the usual form: a comment block, meta({...}), named part('...') blocks, seeded rng().
+
+            THE CHECKS
+            - Every change is measured against the version it came from: blocks per part, floating pieces, issues,
+              red-pen marks. "POSSIBLE REGRESSION" lines mean the numbers got worse: look at the before/after image,
+              and UNDO when the change did not do what you meant.
+            - A rewrite, a change over a large share of the build, or a measured regression is also shown to an
+              independent judge, unlabelled, in both orders. When it prefers the version before both times, that
+              version stays current (yours is kept; REVERT n takes it anyway if you are sure). The reply then lists,
+              part by part, what your version fixed: TAKE those parts, and leave out the part that made it worse.
+
+            CODE THAT EDITS WELL
+            - Split big and organic things into named sub-parts ('tree/trunk', 'tree/limb-east', 'tree/crown-north'):
+              each part has its own random stream, so changing one leaves the others exactly as they were.
+            - For per-block variation use cellRand(x,y,z) or mix()/noise(): the same cell always gets the same block.
+              rng() draws shift whenever a call before them changes, which turns a small fix into a different build.
+            - Keep key dimensions in named constants at the top, and place details from anchors and partBox().
+
+            Write one or two sentences of what you are changing and why before your blocks.
+            The script keeps the usual form: a comment block, meta({...}), named part('...') blocks.
             Scripts are re-run deterministically, so the same script always gives the same build.
             """;
 
     /** System prompt of a studio session: the same knowledge and API, with the turn protocol instead of one answer. */
     public static String studioSystem(Stdlib lib, String blockList) {
+        // the block list (half of this prompt's tokens) and the example scripts are looked up when needed instead:
+        // a ```blocks query lists ids with their real colours, and the examples are a handbook chapter
         return HEAD + "\n" + Prompts.blockStateRules()
                 + "\n- Kits (door, windowAt, roof, stairs, column, chair...) orient their blocks for you: prefer them.\n\n"
                 + CRAFT_V2 + "\n" + lib.apiCard() + "\n" + STUDIO_CONTRACT + "\n" + Handbook.contents()
-                + "\n# EXAMPLES (style reference only; do not copy)\n" + examples(lib)
-                + (blockList == null || blockList.isBlank() ? "" : "\n# VALID BLOCK IDS (Minecraft Java 26.3 — use ONLY these)\n" + blockList);
+                + (blockList == null || blockList.isBlank() ? "" : "\n" + BLOCKS_NOTE);
     }
+
+    static final String BLOCKS_NOTE = """
+            # BLOCK IDS (Minecraft Java 26.3)
+            Look block ids up instead of guessing: a ```blocks block with words (one query per line), e.g. `pink`,
+            `dark wood`, `deepslate`, `copper`, `_trapdoor`, `white stone`, lists the matching ids with their real colour
+            as seen in game and which stairs/slab/wall/fence forms exist. A wrong id is auto-corrected to the nearest
+            valid one and the reply says so; check those corrections, since the nearest name may not be the look you meant.
+            """;
 
     /** The first message of a studio session for a new build. */
     public static String studioStart(Stdlib lib, String request, String scale, int minutes, boolean delegate) {
@@ -189,9 +254,10 @@ public final class ScriptPrompts {
                 %s
                 Make the best build you can of this, the way a professional builder works: understand the subject and
                 what makes it unmistakable, settle scale and massing, write the script, then look at what you built
-                (from far, at eye level, close up), and refine where it matters most, until you would show it. %s
+                (from far, at eye level, close up), and improve it where it matters most, turn by turn, until you would
+                show it. %s
                 You have about %d minutes. There are no fixed steps: spend your turns where they improve the build.
-                %sStart with your first complete script.
+                %sStart with your ```notes and your first complete script: the whole composition at its final size.
                 """.formatted(Prompts.request("BUILD REQUEST", request), recipes.isBlank() ? "" : recipes + "\n", scale, minutes,
                 delegate ? "For a big build you can delegate parts to helpers once the whole exists, and keep working meanwhile.\n" : "");
     }

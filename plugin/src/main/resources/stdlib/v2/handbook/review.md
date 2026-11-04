@@ -17,4 +17,7 @@ Typical faults:
 - floating or unsupported blocks, lights in the open with nothing holding them.
 - empty interiors, dark rooms, blocked doors, stairs that do not reach the floor.
 - the setting overpowers or hides the subject; the subject floats on an unfinished flat ground.
+Each pass: write the faults into the ISSUES of your notes with where they are, fix the biggest first where it is,
+and check the before/after of the change. A fault that comes back after a fix means the fix was in the wrong place:
+inspect the blocks there instead of rewriting the part.
 Stop when the next change would be smaller than the risk of breaking what works.

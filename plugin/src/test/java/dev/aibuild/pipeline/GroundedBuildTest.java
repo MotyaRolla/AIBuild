@@ -224,5 +224,12 @@ class GroundedBuildTest {
         assertFalse(plot.hasCode("overall_size_mismatch"), plot.toText());
         o.exactSize = new int[]{30, 11, 30};
         assertTrue(StructureAnalyzer.analyze(run(house).model(), info, o).hasCode("overall_size_mismatch"));
+        // a scene sized as a whole: a lantern found as the "main body" must not make it a mismatch
+        o.exactSize = new int[]{81, 11, 81};
+        AnalysisReport scene = StructureAnalyzer.analyze(run("box(-40, 0, -40, 40, 0, 40, 'grass_block');"
+                + "box(-1, 1, -1, 1, 3, 1, 'stone_bricks', {walls: true}); box(-1, 4, -1, 1, 4, 1, 'stone_bricks');"
+                + "for (let x = -36; x <= 36; x += 12) tree(x, 1, -34, {species: 'oak', h: 10});").model(), info, o);
+        assertFalse(scene.issues.stream().anyMatch(i -> "overall_size_mismatch".equals(i.code()) && !i.message().contains("y size")),
+                scene.toText());
     }
 }

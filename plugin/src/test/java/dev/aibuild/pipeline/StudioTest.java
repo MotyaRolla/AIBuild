@@ -122,6 +122,15 @@ class StudioTest {
             this.pool = pool;
         }
 
+        /** The blind judge's answers, by call; "SAME" when none are left. */
+        final Deque<String> judgeAnswers = new ArrayDeque<>();
+        final List<String> judgeTags = new ArrayList<>();
+
+        public synchronized String judge(List<ChatMessage> msgs, String tag) {
+            judgeTags.add(tag);
+            return judgeAnswers.isEmpty() ? "SAME\nno difference" : judgeAnswers.poll();
+        }
+
         public synchronized String call(List<ChatMessage> msgs, String tag) {
             if (tag.contains("-d")) return helperAnswers.isEmpty() ? "DONE" : helperAnswers.poll();
             sent.add(msgs);
@@ -154,6 +163,7 @@ class StudioTest {
     private static StudioSession.Settings settings() {
         StudioSession.Settings s = new StudioSession.Settings();
         s.eyes = false;          // renders are tested elsewhere; here the loop
+        s.verify = false;        // the blind check has its own tests
         return s;
     }
 
@@ -162,37 +172,43 @@ class StudioTest {
     @Test void writeFailFixLookDoneShipsTheVersionTheModelNamed() throws Exception {
         Scripted host = new Scripted(null,
                 HOUSE,
-                "```js\npart('house', () => { box(0,1,0,6,4,6,'stone_bricks',{walls:true}); undefinedCall(); });\n```",
+                "```js\npart('house', () => { box(0,1,0,6,6,6,'stone_bricks',{walls:true}); undefinedCall(); });\n```",
                 """
-                Fix: higher walls.
+                Fix of my draft: drop the stray call.
                 <<<<<<< SEARCH
-                box(0,1,0,6,4,6,'stone_bricks',{walls:true});
+                 undefinedCall();
                 =======
-                box(0,1,0,6,6,6,'stone_bricks',{walls:true});
                 >>>>>>> REPLACE
                 """,
                 "```inspect\n{\"box\":[0,5,0,6,6,6]}\n```",
                 "Version 1 had the better proportions.\nDONE 1");
         StudioSession.Outcome o = session(host, settings()).run(null);
         assertTrue(o.done());
-        assertEquals(2, o.versions().size(), "the failed run made no version");
+        assertEquals(2, o.versions().size(), "the failed run made no version, its fix did");
+        assertTrue(o.versions().get(1).source().contains("6,6,6"), "the fix applied to the draft, not to version 1");
+        assertEquals(1, o.versions().get(1).parent());
         assertEquals(1, o.shipped().n(), "the model chose version 1");
         assertEquals(5, o.turns());
         String afterFail = host.sent.get(2).getLast().content();
         assertTrue(afterFail.contains("The script failed") && afterFail.contains("version 1 stays current"), afterFail);
+        assertTrue(afterFail.contains("DRAFT: your latest edit does not run") && afterFail.contains("undefinedCall"), afterFail);
         String afterInspect = host.sent.get(4).getLast().content();
         assertTrue(afterInspect.contains("inspect x 0..6 y 5..6"), afterInspect);
         assertEquals("Version 1 had the better proportions. DONE 1", o.diagnosis());
     }
 
-    @Test void theReplyCarriesTheRunTheAnalysisAndTheClock() throws Exception {
-        Scripted host = new Scripted(null, HOUSE, "DONE");
+    @Test void theReplyCarriesTheRunTheAnalysisTheStateAndTheClock() throws Exception {
+        Scripted host = new Scripted(null, "Walls first.\n```notes\nINTENT: a 7x7 stone hut\n```\n" + HOUSE, "DONE");
         session(host, settings()).run(null);
         String reply = host.sent.get(1).getLast().content();
         assertTrue(reply.contains("VERSION 1 (whole script)"), reply);
         assertTrue(reply.contains("PARTS:"), reply);
-        assertTrue(reply.contains("ANALYSIS (information for you; nothing here is enforced)"), reply);
-        assertTrue(reply.contains("No time limit; turn 1 of at most 40"), reply);
+        assertTrue(reply.contains("ANALYSIS: "), reply);
+        assertTrue(reply.contains("INTENT: a 7x7 stone hut"), "the notes come back: " + reply);
+        assertTrue(reply.contains("v1 whole script:") && reply.contains("You: Walls first."), "the journal: " + reply);
+        assertTrue(reply.contains("THE SCRIPT OF VERSION 1") && reply.contains("box(0,1,0,6,4,6"), reply);
+        assertTrue(reply.contains("No time limit; turn 2 of at most 40"), reply);
+        assertFalse(reply.contains("Walkable zones"), "the spatial report only on REPORT");
     }
 
     @Test void theDeadlineShipsTheCurrentVersion() throws Exception {
@@ -259,18 +275,152 @@ class StudioTest {
         }
     }
 
-    @Test void oldTurnsAreShortenedButTheCurrentScriptIsRestated() throws Exception {
-        StudioSession.Settings s = settings();
-        s.contextTokens = 50;   // force compaction from the start
+    @Test void onlyTheLastAnswerIsSentAndTheCurrentScriptOnce() throws Exception {
         String pad = "// " + "a long comment that makes the script big enough to be elided ".repeat(10) + "\n";
         String big = HOUSE.replace("```js\n", "```js\n" + pad);
         Scripted host = new Scripted(null, big, big.replace("6,4,6", "6,5,6"), big.replace("6,4,6", "6,7,6"), "DONE");
-        session(host, s).run(null);
+        session(host, settings()).run(null);
         List<ChatMessage> last = host.sent.getLast();
+        assertEquals(4, last.size(), "system, opening, the last answer, the reply");
         String all = String.join("\n", last.stream().map(ChatMessage::content).toList());
-        assertTrue(all.contains("CURRENT SCRIPT, version 3"), all);
-        assertTrue(all.contains("[code omitted]"), "old code is elided");
+        assertTrue(all.contains("THE SCRIPT OF VERSION 3"), all);
+        assertTrue(all.contains("[code omitted: the script is shown below]"), "the answer's code is elided");
         assertFalse(all.contains("6,4,6"), "the first script is gone from the conversation");
+        assertEquals(1, all.split("6,7,6", -1).length - 1, "the current script appears once");
+        assertTrue(all.contains("v2 <- v1") && all.contains("v3 <- v2"), "the journal keeps every version: " + all);
+    }
+
+    @Test void aBlockOfPartsReplacesThosePartsAndKeepsTheRest() throws Exception {
+        String two = "```js\nmeta({title:'t'});\nconst W = 6;\npart('house', () => { box(0,1,0,W,4,W,'stone_bricks',{walls:true}); });\n"
+                + "part('garden', () => { box(8,1,0,9,1,1,'oak_leaves'); });\n```";
+        Scripted host = new Scripted(null, two, "Fuller garden.\n```js\npart('garden', () => { box(8,1,0,12,2,3,'oak_leaves'); });\n```", "DONE");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        String src = o.shipped().source();
+        assertEquals(2, o.shipped().n());
+        assertTrue(src.contains("const W = 6;") && src.contains("box(0,1,0,W,4,W"), "the rest stays: " + src);
+        assertTrue(src.contains("box(8,1,0,12,2,3") && !src.contains("box(8,1,0,9,1,1"), src);
+        assertTrue(host.sent.get(2).getLast().content().contains("rewrote part('garden')"));
+    }
+
+    @Test void partsOnlyNeedsNothingButPartStatements() {
+        assertNotNull(StudioSession.partsOnly("// a\npart('a', () => { block(0,1,0,'stone'); });\npart('b', () => {});"));
+        assertNull(StudioSession.partsOnly("meta({});\npart('a', () => {});"), "meta() makes it a whole script");
+        assertNull(StudioSession.partsOnly("const k = 2;\npart('a', () => {});"), "other statements make it a whole script");
+        assertEquals(1, StudioSession.partsOnly("part('a', () => { part('a/b', () => {}); });").size(), "nested parts belong to theirs");
+    }
+
+    @Test void undoGoesBackToTheVersionTheCurrentOneCameFrom() throws Exception {
+        Scripted host = new Scripted(null, HOUSE, HOUSE.replace("6,4,6", "6,5,6"), HOUSE.replace("6,4,6", "6,8,6"), "UNDO", "DONE");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        assertEquals(2, o.shipped().n());
+        assertTrue(host.sent.get(4).getLast().content().contains("-> back to v2"));
+    }
+
+    @Test void aChangeThatLosesMostOfAPartIsMeasuredAsAPossibleRegression() throws Exception {
+        String full = "```js\npart('house', () => { box(0,1,0,12,8,12,'stone_bricks'); });\n```";
+        String gutted = "```js\npart('house', () => { box(0,1,0,12,2,12,'stone_bricks'); });\n```";
+        Scripted host = new Scripted(null, full, gutted, "DONE");
+        session(host, settings()).run(null);
+        String reply = host.sent.get(2).getLast().content();
+        assertTrue(reply.contains("CHECK against version 1"), reply);
+        assertTrue(reply.contains("POSSIBLE REGRESSION: part house lost"), reply);
+        assertTrue(reply.contains("height 8 -> 2"), reply);
+    }
+
+    @Test void aRewriteBothJudgmentsPreferBeforeKeepsTheVersionBefore() throws Exception {
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            StudioSession.Settings s = settings();
+            s.eyes = true;
+            s.verify = true;
+            s.imageSize = 320;
+            Scripted host = new Scripted(pool, HOUSE, HOUSE.replace("6,4,6", "9,9,9"), "DONE");
+            // first call: A = before; second call (order swapped): B = before
+            host.judgeAnswers.add("A\nthe proportions of A are right");
+            host.judgeAnswers.add("B\nthe proportions of B are right");
+            StudioSession.Outcome o = session(host, s).run(null);
+            assertEquals(1, o.shipped().n(), "the version before stays current and ships");
+            assertEquals(2, o.versions().size(), "the rewrite is kept as a version");
+            assertEquals(1, o.checks());
+            assertEquals(1, o.rejected());
+            assertTrue(host.sent.get(2).getLast().content().contains("BLIND CHECK") && host.sent.get(2).getLast().content().contains("REVERT 2"));
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test void aSplitJudgmentKeepsTheNewVersion() throws Exception {
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            StudioSession.Settings s = settings();
+            s.eyes = true;
+            s.verify = true;
+            s.imageSize = 320;
+            Scripted host = new Scripted(pool, HOUSE, HOUSE.replace("6,4,6", "9,9,9"), "DONE");
+            host.judgeAnswers.add("A\nA");      // prefers before in one order...
+            host.judgeAnswers.add("A\nA");      // ...and the new one in the other: position bias, not a verdict
+            StudioSession.Outcome o = session(host, s).run(null);
+            assertEquals(2, o.shipped().n());
+            assertEquals(0, o.rejected());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test void firstDraftsAreWrittenInParallelAndTheTournamentWinnerIsBuiltOn() throws Exception {
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            StudioSession.Settings s = settings();
+            s.eyes = true;
+            s.imageSize = 320;
+            s.firstDrafts = 2;
+            String other = HOUSE.replace("6,4,6", "6,9,6");
+            Scripted host = new Scripted(pool, HOUSE, other, "DONE") {
+                @Override public synchronized String call(List<ChatMessage> msgs, String tag) {
+                    if (tag.endsWith("-t1x2")) return other;      // the parallel draft
+                    if (tag.endsWith("-t1")) return HOUSE;
+                    return answers.isEmpty() ? "DONE" : "DONE";
+                }
+            };
+            host.judgeAnswers.add("B\nB is taller and reads better");   // draft 1 = A, draft 2 = B
+            host.judgeAnswers.add("A\nA is taller and reads better");   // swapped
+            StudioSession.Outcome o = session(host, s).run(null);
+            assertEquals(9, o.shipped().result().model().solidBounds()[4], "draft 2 won and is version 1");
+            assertTrue(host.judgeTags.stream().allMatch(t -> t.contains("drafts")), host.judgeTags.toString());
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test void aDraftThatLooksThingsUpFirstGetsItsAnswersAndStaysInTheRunning() throws Exception {
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            StudioSession.Settings s = settings();
+            s.eyes = true;
+            s.imageSize = 320;
+            s.firstDrafts = 2;
+            String other = HOUSE.replace("6,4,6", "6,9,6");
+            List<String> lookPrompts = new java.util.concurrent.CopyOnWriteArrayList<>();
+            Scripted host = new Scripted(pool, HOUSE, other, "DONE") {
+                @Override public synchronized String call(List<ChatMessage> msgs, String tag) {
+                    if (tag.endsWith("-t1x1-look")) {
+                        lookPrompts.add(msgs.getLast().content());
+                        return other;                              // draft 1 writes its script after the lookups
+                    }
+                    if (tag.endsWith("-t1x2")) return HOUSE;
+                    if (tag.endsWith("-t1")) return "```notes\nINTENT: a tall house\n```\n```guide walls\n```\n```blocks\nstone bricks\n```";
+                    return "DONE";
+                }
+            };
+            host.judgeAnswers.add("A\nA is taller");   // draft 1 = A
+            host.judgeAnswers.add("B\nB is taller");   // swapped
+            StudioSession.Outcome o = session(host, s).run(null);
+            assertEquals(1, lookPrompts.size(), "the lookups were answered inside the draft");
+            assertTrue(lookPrompts.getFirst().contains("BLOCKS matching 'stone bricks'"), lookPrompts.getFirst());
+            assertEquals(9, o.shipped().result().model().solidBounds()[4], "the draft that looked first won and is version 1");
+        } finally {
+            pool.shutdownNow();
+        }
     }
 
     private static final String OPTION_HOUSE = """
@@ -314,32 +464,6 @@ class StudioTest {
         assertFalse(later.contains("floating: 4 blocks"), "a kept mark is not marked again: " + later);
     }
 
-    @Test void beforeShippingTheModelComparesBlindAndItsChoiceShips() throws Exception {
-        StudioSession.Settings s = settings();
-        s.eyes = true;
-        s.imageSize = 360;
-        // seed 5, shipping version 4: A is the version from three changes earlier, B the one being shipped
-        Scripted host = new Scripted(null, HOUSE, HOUSE.replace("6,4,6", "6,5,6"), HOUSE.replace("6,4,6", "6,6,6"),
-                HOUSE.replace("6,4,6", "6,8,6"), "DONE", "PREFER B");
-        StudioSession.Outcome o = session(host, s).run(null);
-        assertTrue(host.sent.get(5).getLast().content().contains("Before this ships: a blind comparison"));
-        assertTrue(o.done());
-        assertEquals(4, o.shipped().n());
-        assertEquals(6, o.turns());
-    }
-
-    @Test void preferringTheEarlierVersionIsReportedAndTheModelDecides() throws Exception {
-        StudioSession.Settings s = settings();
-        s.eyes = true;
-        s.imageSize = 360;
-        Scripted host = new Scripted(null, HOUSE, HOUSE.replace("6,4,6", "6,5,6"), HOUSE.replace("6,4,6", "6,6,6"),
-                HOUSE.replace("6,4,6", "6,8,6"), "DONE", "PREFER A", "DONE 1");
-        StudioSession.Outcome o = session(host, s).run(null);
-        String reply = host.sent.get(6).getLast().content();
-        assertTrue(reply.contains("You preferred version 1, from before your last changes, over version 4"), reply);
-        assertEquals(1, o.shipped().n());
-    }
-
     private static long imageBytes(List<ChatMessage> msgs) {
         long n = 0;
         for (ChatMessage m : msgs) if (m.contentParts() != null) for (byte[] b : m.contentParts().images()) n += b.length;
@@ -351,12 +475,12 @@ class StudioTest {
         s.eyes = true;
         s.imageSize = 360;
         // a provider that refuses big bodies, as the gateway does at 32 MB; the session's own budget is larger
-        long limit = 120_000;
-        s.imageBytes = 400_000;
+        long limit = 40_000;
+        s.imageBytes = 200_000;
         List<Long> sizes = new ArrayList<>();
         int[] refused = {0};
         Scripted host = new Scripted(null, HOUSE, HOUSE.replace("6,4,6", "6,5,6"), HOUSE.replace("6,4,6", "6,6,6"),
-                HOUSE.replace("6,4,6", "6,7,6"), HOUSE.replace("6,4,6", "6,8,6"), "DONE", "PREFER B") {
+                HOUSE.replace("6,4,6", "6,7,6"), HOUSE.replace("6,4,6", "6,8,6"), "DONE") {
             @Override public synchronized String call(List<ChatMessage> msgs, String tag) {
                 long b = imageBytes(msgs);
                 if (b > limit) {
@@ -374,8 +498,8 @@ class StudioTest {
         assertTrue(sizes.stream().allMatch(b -> b <= limit), sizes.toString());
         assertTrue(refused[0] >= 1, "the limit was reached at least once");
         String text = host.sent.getLast().stream().map(ChatMessage::content).reduce("", String::concat);
-        assertTrue(text.contains("the images of this turn were left out"), text);
-        assertTrue(imageBytes(host.sent.getLast()) > 0, "the newest turns keep their images");
+        assertTrue(text.contains("left out to keep the request small"), text);
+        assertTrue(imageBytes(host.sent.getLast()) > 0, "the newest turn keeps its first images");
     }
 
     @Test void aFailedModelCallShipsTheVersionsAlreadyBuilt() throws Exception {
@@ -410,5 +534,119 @@ class StudioTest {
         assertTrue(reply.contains("cut at y=2"), reply);
         assertFalse(reply.contains("look {"), "no view failed: " + reply);
         assertNotNull(afterLook.getLast().contentParts(), "the images went with the reply");
+    }
+
+    // ------------------------------------------------------------------ nothing an answer asks for is lost
+
+    private static final String SCENE = "```js\nmeta({title:'t'});\n"
+            + "part('tower', () => { box(0,1,0,2,6,2,'stone_bricks'); box(0,9,0,2,10,2,'stone_bricks'); });\n"
+            + "part('yard', () => { box(5,1,0,9,1,4,'oak_planks'); });\n```";
+
+    @Test void severalPartBlocksAndAHunkInOneAnswerAllApply() throws Exception {
+        Scripted host = new Scripted(null, SCENE, """
+                Tower, yard and one tweak.
+                ```js
+                part('tower', () => { box(0,1,0,2,10,2,'stone_bricks'); });
+                ```
+                ```js
+                part('yard', () => { box(5,1,0,9,1,6,'oak_planks'); });
+                ```
+                ```js
+                part('well', () => { box(12,1,0,13,2,1,'cobblestone'); });
+                ```
+                <<<<<<< SEARCH
+                meta({title:'t'});
+                =======
+                meta({title:'t2'});
+                >>>>>>> REPLACE
+                """, "DONE");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        String src = o.shipped().source();
+        assertEquals(2, o.shipped().n());
+        assertTrue(src.contains("title:'t2'"), "the hunk applied: " + src);
+        assertTrue(src.contains("box(0,1,0,2,10,2") && !src.contains("box(0,9,0"), "the tower block applied: " + src);
+        assertTrue(src.contains("box(5,1,0,9,1,6"), "the yard block applied: " + src);
+        assertTrue(src.contains("part('well'"), "the new part was added: " + src);
+        assertFalse(host.sent.get(2).getLast().content().contains("NOT APPLIED"));
+    }
+
+    @Test void aLooseFragmentIsNamedInsteadOfWipingTheBuild() throws Exception {
+        Scripted host = new Scripted(null, SCENE, """
+                ```js
+                part('yard', () => { box(5,1,0,9,1,6,'oak_planks'); });
+                ```
+                ```js
+                function helper(x) { return x + 1; }
+                ```
+                """, "DONE");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        String src = o.shipped().source();
+        assertTrue(src.contains("part('tower'") && src.contains("box(5,1,0,9,1,6"), src);
+        String reply = host.sent.get(2).getLast().content();
+        assertTrue(reply.contains("NOT APPLIED") && reply.contains("function helper"), reply);
+    }
+
+    @Test void aWholeScriptWithOtherEditsSaysWhatWasNotApplied() throws Exception {
+        Scripted host = new Scripted(null, SCENE, SCENE.replace("9,1,4", "9,1,8") + """
+
+                <<<<<<< SEARCH
+                part('yard'
+                =======
+                part('court'
+                >>>>>>> REPLACE
+                """, "DONE");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        assertTrue(o.shipped().source().contains("9,1,8") && o.shipped().source().contains("part('yard'"));
+        assertTrue(host.sent.get(2).getLast().content().contains("NOT APPLIED"), host.sent.get(2).getLast().content());
+    }
+
+    @Test void takeBringsBackAPartOfAnotherVersion() throws Exception {
+        Scripted host = new Scripted(null, SCENE,
+                "```js\npart('tower', () => { box(0,1,0,2,10,2,'stone_bricks'); });\npart('yard', () => { box(5,1,0,6,1,1,'dirt'); });\n```",
+                "REVERT 1", "TAKE tower FROM 2", "DONE");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        String src = o.shipped().source();
+        assertEquals(3, o.shipped().n());
+        assertEquals(1, o.shipped().parent());
+        assertTrue(src.contains("box(0,1,0,2,10,2"), "the tower of v2: " + src);
+        assertTrue(src.contains("box(5,1,0,9,1,4,'oak_planks')"), "the yard of v1 stays: " + src);
+        assertTrue(o.shipped().origin().contains("part('tower') from v2"), o.shipped().origin());
+    }
+
+    @Test void anOpenFaultStaysListedWithTheVersionThatHadItFixed() throws Exception {
+        // v1: the tower's top floats; v2 fixes the tower but is reverted; the fault stays in the state, with the TAKE
+        Scripted host = new Scripted(null, SCENE,
+                "```js\npart('tower', () => { box(0,1,0,2,10,2,'stone_bricks'); });\n```",
+                "REVERT 1", "```look\n{\"top\":true}\n```");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        String state = host.sent.get(3).getLast().content();
+        assertTrue(state.contains("OPEN FAULTS"), state);
+        assertTrue(state.contains("open since v1") && state.contains("part tower"), state);
+        assertTrue(state.contains("TAKE tower FROM 2"), state);
+    }
+
+    @Test void theJudgesLettersAreToldAsVersions() {
+        assertEquals("version 2 buries the tree, while version 1 keeps the lake",
+                StudioSession.relabel("Version B buries the tree, while Version A keeps the lake", "version 1", "version 2"));
+        assertEquals("A cluttered grove: version 1 reads better than version 2",
+                StudioSession.relabel("A cluttered grove: A reads better than B", "version 1", "version 2"));
+    }
+
+    @Test void blocksAreLookedUpWithTheirColours() {
+        Scripted host = new Scripted(null);
+        String r = BlockLookup.lookup("oak", host.info);
+        assertTrue(r.contains("oak_planks") && r.contains("#"), r);
+        assertTrue(BlockLookup.lookup("no-such-thing-xyz", host.info).contains("none"));
+        assertTrue(BlockLookup.name(0xF6B4DA).endsWith("pink"), BlockLookup.name(0xF6B4DA));
+        assertEquals("white", BlockLookup.name(0xFAFAFA));
+        assertTrue(BlockLookup.name(0x3B2A1A).contains("brown"), BlockLookup.name(0x3B2A1A));
+    }
+
+    @Test void theStudioPromptHasNoBlockListButSaysHowToLookThemUp() {
+        String sys = ScriptPrompts.studioSystem(Stdlib.V2, "stone, dirt, oak_planks");
+        assertFalse(sys.contains("VALID BLOCK IDS"));
+        assertTrue(sys.contains("```blocks"));
+        assertFalse(sys.contains("## Example:"), "the examples are a handbook chapter now");
+        assertNotNull(Handbook.chapter(Stdlib.V2, "examples"));
     }
 }

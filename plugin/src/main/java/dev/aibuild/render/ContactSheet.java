@@ -57,6 +57,152 @@ public final class ContactSheet {
         return sheet;
     }
 
+    // ------------------------------------------------------------------ one view per image
+    //
+    // A vision model gets a fixed token budget per image (DeepSeek: about 1300x1300 pixels' worth, at most 1024 tokens),
+    // so six views packed into one sheet get a sixth of that each and fine detail is lost. The views a model judges
+    // from are sent one per image, each at about the full budget; only the all-sides context stays a sheet.
+
+    /** Width of a single-view image; height is 3/4 of it (1440 x 1080, about the per-image pixel budget). */
+    public static final int VIEW_W = 1440;   // the default; the studio derives its own from image-size
+
+    /** One rendered view as an image of its own, with its label. */
+    public static byte[] single(VoxelModel model, BlockInfo info, VoxelRaster.Camera cam, VoxelRaster.Options opt, String label) {
+        BufferedImage img = new BufferedImage(cam.width(), cam.height(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        try {
+            tile(g, VoxelRaster.render(model, info, cam, opt), 0, 0, label);
+        } finally {
+            g.dispose();
+        }
+        return png(img);
+    }
+
+    /**
+     * How a version looks, one view per image: the whole build from the front corner; the subject up close from the
+     * other front corner (or the whole build from the back when there is no separate subject); a player's view from
+     * in front of the subject; and a sheet with all four corners, the top and the back at eye level for context.
+     * {@code subject} is the box of the main subject (a hero inside a scene), or null when the whole build is it.
+     */
+    public static java.util.List<byte[]> views(VoxelModel model, BlockInfo info, int[] subject, String subjectName, int w) {
+        java.util.List<byte[]> out = new java.util.ArrayList<>();
+        int[] b = model.solidBounds();
+        if (b == null) {
+            out.add(of(model, info, w));
+            return out;
+        }
+        int h = w * 3 / 4;
+        VoxelRaster.Options opt = VoxelRaster.Options.defaults();
+        out.add(single(model, info, VoxelRaster.iso(b, 0, w, h), opt, "whole build from the south-east (front right)"));
+        int[] above = aboveGround(model);
+        int[] target = subject != null ? subject : above;
+        if (subject != null) {
+            out.add(single(model, info, VoxelRaster.closeup(subject, 1, w, h), opt, "the subject (" + subjectName + ") from the south-west, close"));
+        } else {
+            out.add(single(model, info, VoxelRaster.iso(b, 2, w, h), opt, "whole build from the north-west (back left)"));
+        }
+        int reach = (int) Math.ceil(Math.max(above[3] - above[0], above[5] - above[2]) * 2.5 + 80);
+        out.add(single(model, info, VoxelRaster.stand(model, target, 0, w, h), opt.ground(reach),
+                "eye level: a player standing in front (south)" + (subject != null ? " of " + subjectName : "")));
+        out.add(corners(model, info, target, w));
+        return out;
+    }
+
+    /** Context sheet: the four corners and the top, plus the back at eye level (3 x 2 tiles). */
+    public static byte[] corners(VoxelModel model, BlockInfo info, int[] target, int maxSide) {
+        int[] b = model.solidBounds();
+        int tw = Math.max(160, maxSide / 3), th = Math.max(120, tw * 3 / 4);
+        BufferedImage sheet = new BufferedImage(tw * 3, th * 2, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = sheet.createGraphics();
+        try {
+            if (b == null) return png(sheet);
+            VoxelRaster.Options opt = VoxelRaster.Options.defaults();
+            String[] names = {"south-east", "south-west", "north-west", "north-east"};
+            for (int v = 0; v < 4; v++) tile(g, VoxelRaster.render(model, info, VoxelRaster.iso(b, v, tw, th), opt), (v % 3) * tw, (v / 3) * th, names[v]);
+            int[] above = aboveGround(model);
+            int reach = (int) Math.ceil(Math.max(above[3] - above[0], above[5] - above[2]) * 2.5 + 80);
+            tile(g, VoxelRaster.render(model, info, VoxelRaster.stand(model, target == null ? above : target, 2, tw, th), opt.ground(reach)),
+                    tw, th, "eye level from the back (north)");
+            tile(g, VoxelRaster.render(model, info, VoxelRaster.top(b, tw, th), opt), 2 * tw, th, "top (north up)");
+        } finally {
+            g.dispose();
+        }
+        return png(sheet);
+    }
+
+    /** Two models side by side from one camera: {@code a} on the left, {@code b} on the right. */
+    public static byte[] sideBySide(VoxelModel a, VoxelModel b, BlockInfo info, VoxelRaster.Camera cam, VoxelRaster.Options opt,
+                                    String labelA, String labelB) {
+        BufferedImage img = new BufferedImage(cam.width() * 2, cam.height(), BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = img.createGraphics();
+        try {
+            tile(g, VoxelRaster.render(a, info, cam, opt), 0, 0, labelA);
+            tile(g, VoxelRaster.render(b, info, cam, opt), cam.width(), 0, labelB);
+        } finally {
+            g.dispose();
+        }
+        return png(img);
+    }
+
+    /** Half-image side of a side-by-side pair for a view width: 1440 gives two 864 x 864 halves, about the per-image budget. */
+    public static int half(int viewW) {
+        return Math.max(160, viewW * 3 / 5);
+    }
+
+    /**
+     * A change, one image per camera with the version before on the left and after on the right, so the only
+     * difference within an image is the change. {@code box} frames a region; null frames the whole build.
+     */
+    public static java.util.List<byte[]> beforeAfterViews(VoxelModel before, VoxelModel after, String beforeLabel, String afterLabel,
+                                                          BlockInfo info, int[] box, int viewW) {
+        int HALF = half(viewW);
+        int[] u = box != null ? box : union(before.solidBounds(), after.solidBounds());
+        java.util.List<byte[]> out = new java.util.ArrayList<>();
+        if (u == null) return out;
+        VoxelRaster.Options opt = VoxelRaster.Options.defaults();
+        String[] side = {"south-east", "north-west"};
+        for (int c = 0; c < 2; c++) {
+            VoxelRaster.Camera cam = box == null ? VoxelRaster.iso(u, c * 2, HALF, HALF) : VoxelRaster.closeup(u, c * 2, HALF, HALF);
+            out.add(sideBySide(before, after, info, cam, opt, beforeLabel + ": " + side[c], afterLabel + ": " + side[c]));
+        }
+        return out;
+    }
+
+    /**
+     * Two builds for a blind comparison, one image per camera with A on the left and B on the right: the south-east
+     * and south-west corners, and a player's view from the front, each camera the same for both.
+     */
+    public static java.util.List<byte[]> pairViews(VoxelModel a, VoxelModel b, BlockInfo info, int viewW) {
+        int HALF = half(viewW);
+        int[] u = union(a.solidBounds(), b.solidBounds());
+        java.util.List<byte[]> out = new java.util.ArrayList<>();
+        if (u == null) return out;
+        int[] above = union(aboveGround(a), aboveGround(b));
+        VoxelRaster.Options opt = VoxelRaster.Options.defaults();
+        out.add(sideBySide(a, b, info, VoxelRaster.iso(u, 0, HALF, HALF), opt, "A: south-east", "B: south-east"));
+        out.add(sideBySide(a, b, info, VoxelRaster.iso(u, 1, HALF, HALF), opt, "A: south-west", "B: south-west"));
+        int reach = (int) Math.ceil(Math.max(above[3] - above[0], above[5] - above[2]) * 2.5 + 80);
+        // the same standing point for both: chosen on the union, so neither build moves the camera
+        VoxelRaster.Camera eye = VoxelRaster.stand(a.nonAirCount() >= b.nonAirCount() ? a : b, above, 0, HALF, HALF);
+        out.add(sideBySide(a, b, info, eye, opt.ground(reach), "A: eye level from the front", "B: eye level from the front"));
+        return out;
+    }
+
+    /** Close-ups of parts, one image each, framed on the part from the front corner. */
+    public static java.util.List<byte[]> closeupViews(VoxelModel model, BlockInfo info, java.util.List<Focus> parts, int w) {
+        java.util.List<byte[]> out = new java.util.ArrayList<>();
+        for (Focus f : parts) {
+            out.add(single(model, info, VoxelRaster.closeup(f.box(), 0, w, w * 3 / 4), VoxelRaster.Options.defaults(), "close-up: " + f.name()));
+        }
+        return out;
+    }
+
+    private static int[] union(int[] a, int[] b) {
+        if (a == null) return b;
+        if (b == null) return a;
+        return new int[]{Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.min(a[2], b[2]), Math.max(a[3], b[3]), Math.max(a[4], b[4]), Math.max(a[5], b[5])};
+    }
+
     /** A named box to show up close. */
     public record Focus(String name, int[] box) {
     }
@@ -135,6 +281,38 @@ public final class ContactSheet {
             for (int i = 0; i < n; i++) {
                 tile(g, VoxelRaster.render(models.get(i), info, cam, VoxelRaster.Options.defaults()), (i % cols) * tw, (i / cols) * th,
                         labels.get(i));
+            }
+        } finally {
+            g.dispose();
+        }
+        return png(sheet);
+    }
+
+    /**
+     * A change: the build before it (top row) and after it (bottom row), from the same two opposite corners, so the
+     * only difference between the rows is the change. {@code box} is the region to frame; null frames the whole build.
+     */
+    public static byte[] beforeAfter(VoxelModel before, VoxelModel after, String beforeLabel, String afterLabel, BlockInfo info,
+                                     int[] box, int maxSide) {
+        int[] u = box;
+        if (u == null) {
+            int[] ba = before.solidBounds(), bb = after.solidBounds();
+            u = ba == null ? bb : bb == null ? ba : new int[]{Math.min(ba[0], bb[0]), Math.min(ba[1], bb[1]), Math.min(ba[2], bb[2]),
+                    Math.max(ba[3], bb[3]), Math.max(ba[4], bb[4]), Math.max(ba[5], bb[5])};
+        }
+        int tw = Math.max(160, maxSide / 2), th = Math.max(120, tw * 5 / 8);
+        BufferedImage sheet = new BufferedImage(tw * 2, th * 2, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g = sheet.createGraphics();
+        try {
+            if (u == null) return png(sheet);
+            VoxelRaster.Options opt = VoxelRaster.Options.defaults();
+            VoxelRaster.Camera[] cams = box == null ? new VoxelRaster.Camera[]{VoxelRaster.iso(u, 0, tw, th), VoxelRaster.iso(u, 2, tw, th)}
+                    : new VoxelRaster.Camera[]{VoxelRaster.closeup(u, 0, tw, th), VoxelRaster.closeup(u, 2, tw, th)};
+            String[] side = {"south-east", "north-west"};
+            VoxelModel[] m = {before, after};
+            String[] name = {beforeLabel, afterLabel};
+            for (int r = 0; r < 2; r++) {
+                for (int c = 0; c < 2; c++) tile(g, VoxelRaster.render(m[r], info, cams[c], opt), c * tw, r * th, name[r] + ": " + side[c]);
             }
         } finally {
             g.dispose();

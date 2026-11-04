@@ -12,6 +12,7 @@ function rand(a, b) { return a + (b - a) * __rng(); }
 function randInt(a, b) { return Math.floor(a + (b - a + 1) * __rng()); }
 function pick(arr) { return arr[Math.floor(__rng() * arr.length)]; }
 function chance(p) { return __rng() < p; }
+function cellRand(x, y, z, salt) { return __hash(x, y, z, salt === undefined ? 0 : salt); }
 function noise(x, y, z, scale) { return __noise(x, y, z, scale === undefined ? 8 : scale); }
 function lerp(a, b, t) { return a + (b - a) * t; }
 function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
@@ -1950,11 +1951,13 @@ function groundCover(x1, z1, x2, z2, opts) {
         : ['coarse_dirt', 'podzol', 'rooted_dirt', 'moss_block'];
     for (var x = x1; x <= x2; x++) for (var z = z1; z <= z2; z++) {
         var e = Math.max(Math.abs(x - cx) / hx, Math.abs(z - cz) / hz);
-        if (e > 0.75 && chance((e - 0.75) * 4)) continue;
+        // the edge fades on a noise contour, and each patch is one material chosen at a coarse scale: patches
+        // read as moss or worn ground, where kinds switching every block read as noise from any distance
+        if (e > 0.75 && (noise(x + 5, 0, z - 9, 4) + 1) / 2 < (e - 0.75) * 4) continue;
         if (get(x, 0, z) !== null && !/grass_block/.test(get(x, 0, z))) continue;
-        var n = (noise(x, 0, z, 6) + 1) / 2, n2 = (noise(x - 31, 0, z + 17, 2.5) + 1) / 2;
+        var n = (noise(x, 0, z, 6) + 1) / 2, kind = (noise(x - 31, 0, z + 17, 14) + 1) / 2;
         var m = 'grass_block';
-        if (n < share * 0.9 && n2 < 0.75) m = alt[Math.floor(n2 * alt.length * 0.999)];
+        if (n < share * 0.9) m = alt[Math.floor(clamp(kind, 0, 0.999) * alt.length)];
         block(x, 0, z, m);
     }
     if (opts.density !== 0) flowers(x1, z1, x2, z2, { density: opts.density || 0.1, kinds: opts.kinds });
@@ -2016,13 +2019,24 @@ function bush(x, y, z, r, leaves) {
     place(ellipsoid([x, y, z], [(r || 1.5) * 1.2, (r || 1.5) * 0.85, (r || 1.5)]).warp(0.6, 1.8),
         leaves || mix({ oak_leaves: 3, azalea_leaves: 2, flowering_azalea_leaves: 1 }, { scale: 1.5 }), { onlyAir: true });
 }
-/** Terrain mound / hill: smooth half-ellipsoid with grass on top, dirt and stone inside. */
+/** Terrain mound / hill: a smooth rolling height field, grass on top, dirt and stone below; returns its box. */
 function hill(x, z, rx, rz, h, opts) {
+    // a height field with a smooth fall-off, not a dome: grass on every step and no bare dirt bands, so it reads as
+    // rolling ground and not as stacked rings; rough warps the outline
     opts = opts || {};
-    var top = opts.top || 'grass_block';
-    var s = ellipsoid([x, 0, z], [rx, h, rz]).warp(opts.rough || 1.2, 5).and(cuboid([x - rx - 3, 0, z - rz - 3], [x + rx + 3, h + 3, z + rz + 3]));
-    place(s, byNormal({ top: top, side: opts.side || mix({ dirt: 3, coarse_dirt: 1, stone: 1 }), bottom: 'stone' }), { smooth: opts.smooth === true });
-    return s;
+    var top = opts.top || 'grass_block', side = opts.side || 'dirt', rough = opts.rough === undefined ? 0.6 : opts.rough;
+    var reach = 1.3;
+    for (var ix = Math.floor(x - rx * reach); ix <= Math.ceil(x + rx * reach); ix++) {
+        for (var iz = Math.floor(z - rz * reach); iz <= Math.ceil(z + rz * reach); iz++) {
+            var dx = (ix - x) / rx, dz = (iz - z) / rz;
+            var d = Math.sqrt(dx * dx + dz * dz) + noise(ix, 11, iz, Math.max(3, (rx + rz) / 4)) * 0.2 * rough;
+            if (d >= reach) continue;
+            var t = 1 - d / reach;
+            var hh = Math.round(h * t * t * (3 - 2 * t));
+            for (var y = 1; y <= hh; y++) block(ix, y, iz, y === hh ? top : hh - y <= 2 ? side : 'stone');
+        }
+    }
+    return [Math.floor(x - rx * reach), 0, Math.floor(z - rz * reach), Math.ceil(x + rx * reach), h, Math.ceil(z + rz * reach)];
 }
 /** Water inside a basin shape or box [x1,y1,z1,x2,y2,z2] (keep it enclosed so it cannot flow). */
 function water(s) {

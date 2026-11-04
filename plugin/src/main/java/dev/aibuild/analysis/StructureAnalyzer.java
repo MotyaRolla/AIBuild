@@ -1861,11 +1861,16 @@ public final class StructureAnalyzer {
                     issues.add(Issue.of(Severity.MAJOR, "size_limit_exceeded",
                             "overall solid " + axes[i] + " size " + actual[i] + " exceeds maximum " + opts.maximumSize[i]));
                 }
+                // the size asked for may be the building's (a castle in its grounds) or the whole scene's (a garden
+                // with a tree and a pond, where the "main body" found is a lantern): either one matching is a match
                 if (opts.exactSize != null && opts.exactSize.length > i && opts.exactSize[i] > 0
-                        && Math.abs(subject[i] - opts.exactSize[i]) > sizeTolerance(opts.exactSize[i])) {
+                        && Math.abs(subject[i] - opts.exactSize[i]) > sizeTolerance(opts.exactSize[i])
+                        && Math.abs(actual[i] - opts.exactSize[i]) > sizeTolerance(opts.exactSize[i])) {
                     issues.add(Issue.of(Severity.MAJOR, "overall_size_mismatch",
-                            "the main body's " + axes[i] + " size is " + subject[i] + " but should be about " + opts.exactSize[i]
-                                    + " (terrain, trees and paths around it do not count)"));
+                            subject[i] == actual[i]
+                                    ? "the build's " + axes[i] + " size is " + actual[i] + " but should be about " + opts.exactSize[i]
+                                    : "the " + axes[i] + " size should be about " + opts.exactSize[i] + ", but the main building measures "
+                                    + subject[i] + " and the whole build " + actual[i]));
                 }
             }
         }

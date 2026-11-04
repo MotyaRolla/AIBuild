@@ -14,14 +14,17 @@ Sakura (cherry): dark cherry_log trunk with a strong S-curve, wide flat clouds o
 flowering_azalea_leaves), pink_petals on the ground; the crown wider than tall. Willow: drooping strands to the
 ground. Conifer: layered skirts getting smaller to the top.
 tree() builds all of this; hand-build only a hero tree, with tube() branches and ellipsoid().warp() clusters.
+Build a hero tree so it can be improved without being rebuilt: the trunk, each limb and its clusters in named
+sub-parts, the limb ends in one constant. To fix one cluster, change that cluster; the rest stays exactly as it is.
 ```js
+const LIMBS = {east: [[0, 11, 2], [7, 15, 4]], west: [[0, 11, 2], [-6, 14, -3]], north: [[0, 12, 2], [2, 17, -5]]};
 part('hero-tree', () => {
-  const trunk = tube([[0, 1, 0], [1, 6, 1], [0, 12, 2]], t => lerp(2.5, 1.2, t));
-  place(trunk, 'cherry_log');
-  [[[0, 11, 2], [7, 15, 4]], [[0, 11, 2], [-6, 14, -3]], [[0, 12, 2], [2, 17, -5]]].forEach(b => {
+  note('S-curved trunk, three limbs, flattened blossom clouds at the limb ends');
+  part('trunk', () => place(tube([[0, 1, 0], [1, 6, 1], [0, 12, 2]], t => lerp(2.5, 1.2, t)), 'cherry_log'));
+  Object.keys(LIMBS).forEach(name => part('limb-' + name, () => {
+    const b = LIMBS[name];
     place(tube(b, t => lerp(1.0, 0.5, t), {curve: 'line'}), 'cherry_log');
     place(ellipsoid(b[1], [4, 2, 4]).warp(1.2, 3), mix({cherry_leaves: 4, flowering_azalea_leaves: 1}, {scale: 2}), {onlyAir: true});
-  });
-  note('S-curved trunk, three limbs, flattened blossom clouds at the limb ends');
+  }));
 });
 ```

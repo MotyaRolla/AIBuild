@@ -50,6 +50,10 @@ public final class PluginConfig {
     }
 
     /** Studio: parallel sessions for a new build (the blind judge picks between two or more), by mode. */
+    public int studioFirstDrafts(String mode) {
+        return studioFirstDrafts.getOrDefault(mode, 1);
+    }
+
     public int studioSessions(String mode) {
         return studioSessions.getOrDefault(mode, 1);
     }
@@ -104,6 +108,8 @@ public final class PluginConfig {
     public final boolean writeOnce;
     private final Map<String, Integer> studioMinutes;
     private final Map<String, Integer> studioSessions;
+    private final Map<String, Integer> studioFirstDrafts;
+    public final boolean studioVerify;
     /** Studio: minutes for an edit session, the turn fuse, helper sessions and their turns. */
     public final int studioEditMinutes, studioMaxTurns, studioHelperTurns;
     public final boolean studioDelegate;
@@ -220,6 +226,8 @@ public final class PluginConfig {
         writeOnce = c.getBoolean("script.write-once", true);
         studioMinutes = perMode(c, "studio.minutes", Map.of("fast", 8, "light", 15, "standard", 30, "extra", 60), 2, 240);
         studioSessions = perMode(c, "studio.sessions", Map.of("fast", 1, "light", 1, "standard", 1, "extra", 2), 1, 4);
+        studioFirstDrafts = perMode(c, "studio.first-drafts", Map.of("fast", 1, "light", 1, "standard", 2, "extra", 3), 1, 4);
+        studioVerify = c.getBoolean("studio.verify", true);
         studioEditMinutes = Math.clamp(c.getInt("studio.edit-minutes", 15), 2, 240);
         studioMaxTurns = Math.clamp(c.getInt("studio.max-turns", 40), 2, 200);
         studioHelperTurns = Math.clamp(c.getInt("studio.helper-turns", 12), 1, 60);

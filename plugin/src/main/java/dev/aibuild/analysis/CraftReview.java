@@ -153,6 +153,36 @@ public final class CraftReview {
 
     // ------------------------------------------------------------------ walls and eaves
 
+    private static final java.util.regex.Pattern NATURAL = java.util.regex.Pattern.compile(
+            "(?i)(terrain|ground|hill|cliff|rock|stone_?field|mountain|lake|pond|river|shore|beach|island|landscape|grass|moss)");
+    private static final java.util.regex.Pattern BRIDGE = java.util.regex.Pattern.compile("(?i)(bridge|deck|pier|dock|jetty|walkway|boardwalk)");
+    private static final java.util.regex.Pattern RAIL = java.util.regex.Pattern.compile("(?i)(fence|rail|hedge|balustrade|parapet)");
+    private static final java.util.regex.Pattern ORGANIC = java.util.regex.Pattern.compile("(?i)(tree|trunk|limb|branch|crown|canopy|bush|statue|creature|body|head)");
+
+    /** A part that is ground or water: its sides are slopes and banks, not walls. */
+    private static boolean natural(String part) {
+        return part != null && NATURAL.matcher(part).find();
+    }
+
+    private static boolean wallLike(String part) {
+        return part == null || !(BRIDGE.matcher(part).find() || RAIL.matcher(part).find() || ORGANIC.matcher(part).find());
+    }
+
+    /** What gives this kind of surface depth: a facade is not a bridge, and neither is a tree. */
+    private static String depthAdvice(String part) {
+        if (part != null && BRIDGE.matcher(part).find()) {
+            return "Give the side of a bridge or deck depth: a beam or trim line along the deck edge (slabs or stairs set"
+                    + " out by one), posts at a rhythm, an open railing instead of a solid one, an arch or brackets underneath";
+        }
+        if (part != null && RAIL.matcher(part).find()) {
+            return "Break it up: posts at a rhythm, a cap course of slabs or walls, openings or a change of material at the base";
+        }
+        if (part != null && ORGANIC.matcher(part).find()) {
+            return "An organic form should not have a flat face: bulge, twist or step it, and vary the outline";
+        }
+        return "Give it depth: a frame (pillars, beams) proud of a recessed infill, window sills and lintels, a base course";
+    }
+
     private record Facades(int flatArea, int total) {
     }
 
@@ -211,6 +241,7 @@ public final class CraftReview {
         }
         // flat walls: a large, dense, single-plane surface with nothing in front of it
         List<Region> flat = regions.stream()
+                .filter(r -> !natural(r.part))
                 .filter(r -> r.u2 - r.u1 + 1 >= 7 && r.y2 - r.y1 + 1 >= 4 && r.area >= 28
                         && r.area >= 0.6 * (r.u2 - r.u1 + 1) * (r.y2 - r.y1 + 1))
                 .sorted(Comparator.comparingInt((Region r) -> -r.area)).toList();
@@ -220,9 +251,9 @@ public final class CraftReview {
             int w = r.u2 - r.u1 + 1, h = r.y2 - r.y1 + 1;
             int[] box = r.d < 2 ? new int[]{r.u1, r.y1, r.plane, r.u2, r.y2, r.plane} : new int[]{r.plane, r.y1, r.u1, r.plane, r.y2, r.u2};
             int share = (int) Math.round(100.0 * r.mats.values().stream().mapToInt(Integer::intValue).max().orElse(0) / r.area);
-            out.add(new Mark(0, "flat-wall", "flat wall " + w + "x" + h + " facing " + FACING[r.d] + ", " + where(box) + part(r.part)
-                    + " (" + top(r.mats, 2) + ", the main one " + share + "%): one plane with nothing in front. Give it depth:"
-                    + " a frame (pillars, beams) proud of a recessed infill, window sills and lintels, a base course"
+            out.add(new Mark(0, "flat-wall", "flat " + (wallLike(r.part) ? "wall " : "side ") + w + "x" + h + " facing " + FACING[r.d] + ", "
+                    + where(box) + part(r.part) + " (" + top(r.mats, 2) + ", the main one " + share + "%): one plane with nothing in front. "
+                    + depthAdvice(r.part)
                     + (r == shownFlat.getLast() && flat.size() > shownFlat.size() ? " (" + (flat.size() - shownFlat.size()) + " more walls like it)" : "")
                     + ".", box, DIRS[r.d]));
         }
@@ -363,13 +394,23 @@ public final class CraftReview {
         Map<Long, String> names = new HashMap<>();
         Map<String, Integer> colours = new HashMap<>();
         java.util.function.Function<BlockSpec, Integer> colour = s -> colours.computeIfAbsent(s.name(), n -> IsoRenderer.colourOf(s, info));
+        Map<Long, Integer> water = new HashMap<>();      // (x,z) -> highest liquid cell
         model.forEach((x, y, z, s) -> {
+            if (s != null && !s.isAir() && info.isLiquid(s)) water.merge(VoxelModel.key(x, 0, z), y, Math::max);
             if (s == null || s.isAir() || !info.isSolid(s)) return;
             long k = VoxelModel.key(x, 0, z);
             int[] t = top.get(k);
             if (t == null || y > t[0]) {
                 top.put(k, new int[]{y, colour.apply(s)});
                 names.put(k, base(s));
+            }
+        });
+        // a lake or river bed under water is seen through the water, blurred and tinted: its mix is not speckle
+        water.forEach((k, wy) -> {
+            int[] t = top.get(k);
+            if (t != null && wy > t[0]) {
+                top.remove(k);
+                names.remove(k);
             }
         });
         int grass = colour.apply(VoxelModel.TERRAIN);

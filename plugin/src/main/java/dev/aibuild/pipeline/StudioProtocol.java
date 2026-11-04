@@ -16,13 +16,20 @@ import java.util.regex.Pattern;
  * What one studio turn of the model asks for. The model answers in plain text with any of:
  *
  * <ul>
- *   <li>a ```js block with the whole script, or SEARCH/REPLACE hunks against the current script (in a fence or bare);</li>
+ *   <li>```js blocks: the whole script, or blocks of part() statements that replace those parts; and/or SEARCH/REPLACE
+ *   hunks against the current script (in a fence or bare). Everything in an answer applies, in order; what cannot
+ *   is named in the reply, never dropped silently;</li>
  *   <li>```look with a JSON view or a list of up to four views;</li>
  *   <li>```inspect with a JSON box {box:[x1,y1,z1,x2,y2,z2]}, for exact block layers;</li>
  *   <li>```guide with one or more handbook topics;</li>
+ *   <li>```blocks with words, one query per line: the valid block ids that match, with their colours;</li>
  *   <li>```delegate with {part, brief} (or a list): a helper session refines that part in parallel;</li>
- *   <li>commands on a line of their own: REVERT n, FINISH, WAIT, ACCEPT dN, DISCARD dN, DONE [n], PICK name=choice,
- *   KEEP n (a red-pen mark is intended), PREFER A|B (the answer to a blind comparison).</li>
+ *   <li>```notes: the model's own working notes (intent, key dimensions, palette, open issues), shown back every turn;</li>
+ *   <li>TAKE part[, part...] FROM n: those parts as they are in version n replace the current ones (a rejected
+ *   version's good parts are not lost);</li>
+ *   <li>commands on a line of their own: REVERT n, UNDO (back to the version the current one came from), REPORT (the
+ *   full analysis), FINISH, WAIT, ACCEPT dN, DISCARD dN, DONE [n], PICK name=choice, KEEP n (a red-pen mark is
+ *   intended), PREFER A|B (the answer to a blind comparison).</li>
  * </ul>
  *
  * <p>Parsing never fails: a block it cannot read becomes a {@link Turn#problems problem} the reply names, so the
@@ -40,26 +47,29 @@ public final class StudioProtocol {
     public record Turn(String script, List<String[]> hunks, List<JsonObject> looks, List<int[]> inspects, List<String> guides,
                        List<Delegate> delegates, List<Integer> accepts, List<Integer> discards, Integer revert,
                        boolean finish, boolean waitHelpers, boolean done, Integer doneVersion, List<String> problems,
-                       List<String[]> picks, List<Integer> keeps, Character prefer) {
+                       List<String[]> picks, List<Integer> keeps, Character prefer, String notes, boolean undo, boolean report,
+                       List<String> blocks, List<String[]> takes, List<String> blockQueries) {
         /** True when the turn changes the script. */
         public boolean changes() {
-            return script != null || !hunks.isEmpty();
+            return script != null || !hunks.isEmpty() || !blocks.isEmpty() || !takes.isEmpty();
         }
 
         /** True when the turn asks for anything at all. */
         public boolean acts() {
             return changes() || !looks.isEmpty() || !inspects.isEmpty() || !guides.isEmpty() || !delegates.isEmpty()
                     || !accepts.isEmpty() || !discards.isEmpty() || revert != null || finish || waitHelpers || done
-                    || !picks.isEmpty() || !keeps.isEmpty() || prefer != null;
+                    || !picks.isEmpty() || !keeps.isEmpty() || prefer != null || notes != null || undo || report || !blockQueries.isEmpty();
         }
     }
 
     private static final Pattern FENCE = Pattern.compile("```([A-Za-z]*)[^\\n]*\\n([\\s\\S]*?)```");
     private static final Pattern COMMAND = Pattern.compile(
-            "(?m)^\\s*(?:\\*\\*)?(DONE|REVERT|FINISH|WAIT|ACCEPT|DISCARD)(?:\\*\\*)?\\b[ \\t]*:?[ \\t]*(?:v|d)?(\\d+)?[ \\t]*(?:\\*\\*)?[ \\t]*$");
+            "(?m)^\\s*(?:\\*\\*)?(DONE|REVERT|UNDO|REPORT|FINISH|WAIT|ACCEPT|DISCARD)(?:\\*\\*)?\\b[ \\t]*:?[ \\t]*(?:v|d)?(\\d+)?[ \\t]*(?:\\*\\*)?[ \\t]*$");
 
     private static final Pattern PICK = Pattern.compile("(?m)^\\s*(?:\\*\\*)?PICK(?:\\*\\*)?\\b:?[ \\t]*(.+)$");
     private static final Pattern KEEP = Pattern.compile("(?m)^\\s*(?:\\*\\*)?KEEP(?:\\*\\*)?\\b:?[ \\t]*([0-9][0-9 ,\\t]*)$");
+    /** TAKE part[, part...] FROM n: those parts as they are in version n replace the ones in the current script. */
+    private static final Pattern TAKE = Pattern.compile("(?m)^\\s*(?:\\*\\*)?TAKE(?:\\*\\*)?\\b:?[ \\t]*(.+?)[ \\t]+(?:FROM|from)[ \\t]+v?(\\d+)[ \\t.]*(?:\\*\\*)?[ \\t]*$");
     private static final Pattern PREFER = Pattern.compile("(?m)^\\s*(?:\\*\\*)?PREFER(?:\\*\\*)?\\b:?[ \\t]*\\(?([ABab])\\)?[ \\t.]*(?:\\*\\*)?[ \\t]*$");
 
     public static Turn parse(String answer) {
@@ -70,6 +80,9 @@ public final class StudioProtocol {
         List<String> guides = new ArrayList<>();
         List<Delegate> delegates = new ArrayList<>();
         String script = null;
+        String notes = null;
+        List<String> blocks = new ArrayList<>();
+        List<String> blockQueries = new ArrayList<>();
         // tool fences are cut out, so neither the hunk parser nor the commands see their contents
         StringBuilder rest = new StringBuilder();
         Matcher m = FENCE.matcher(text);
@@ -88,22 +101,27 @@ public final class StudioProtocol {
                     }
                 }
                 case "delegate" -> readDelegates(body, delegates, problems);
+                case "notes", "note", "plan" -> notes = body.strip();
+                case "blocks", "block", "ids" -> {
+                    for (String line : body.split("\n")) if (!line.isBlank()) blockQueries.add(line.strip().replace("`", ""));
+                }
                 default -> tool = false;
             }
             if (tool) {
                 rest.append(text, last, m.start());
                 last = m.end();
             } else if ((tag.isEmpty() || tag.equals("js") || tag.equals("javascript")) && !ScriptPatch.hasHunks(body)
-                    && body.contains("(") && (script == null || body.length() > script.length())) {
-                script = body.strip() + "\n";
+                    && body.contains("(")) {
+                // every code block counts, in order: several part() blocks in one answer all apply
+                blocks.add(body.strip() + "\n");
+                if (script == null || body.strip().length() + 1 > script.length()) script = body.strip() + "\n";
             }
         }
         rest.append(text.substring(last));
         String code = rest.toString();
         List<String[]> hunks = ScriptPatch.hunksOf(code);
-        if (!hunks.isEmpty()) script = null;   // hunks win: a fence around them is not a whole script
         Integer revert = null, doneVersion = null;
-        boolean finish = false, waitHelpers = false, done = false;
+        boolean finish = false, waitHelpers = false, done = false, undo = false, report = false;
         List<Integer> accepts = new ArrayList<>(), discards = new ArrayList<>();
         // commands count only outside code: a script may well contain the word DONE in a comment
         String prose = FENCE.matcher(code).replaceAll("");
@@ -120,6 +138,8 @@ public final class StudioProtocol {
                     else revert = n;
                 }
                 case "FINISH" -> finish = true;
+                case "UNDO" -> undo = true;
+                case "REPORT" -> report = true;
                 case "WAIT" -> waitHelpers = true;
                 case "ACCEPT" -> {
                     if (n == null) problems.add("ACCEPT needs a helper number, e.g. ACCEPT d1");
@@ -149,8 +169,17 @@ public final class StudioProtocol {
         Character prefer = null;
         Matcher pr = PREFER.matcher(prose);
         if (pr.find()) prefer = Character.toUpperCase(pr.group(1).charAt(0));
+        List<String[]> takes = new ArrayList<>();
+        Matcher tk = TAKE.matcher(prose);
+        while (tk.find()) {
+            int from = Integer.parseInt(tk.group(2));
+            for (String name : tk.group(1).replace("**", "").split("[,\\s]+")) {
+                String n = unquote(name.strip());
+                if (!n.isEmpty()) takes.add(new String[]{n, String.valueOf(from)});
+            }
+        }
         return new Turn(script, hunks, looks, inspects, guides, delegates, accepts, discards, revert, finish, waitHelpers,
-                done, doneVersion, problems, picks, keeps, prefer);
+                done, doneVersion, problems, picks, keeps, prefer, notes, undo, report, List.copyOf(blocks), takes, blockQueries);
     }
 
     private static void readLooks(String body, List<JsonObject> out, List<String> problems) {

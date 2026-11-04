@@ -13,6 +13,8 @@ at(x,y,z, fn)                    same as withT({at:[x,y,z]}, fn)
 sym('x'|'z', center, (mirrored) => {...})   draw once and mirrored across the plane axis=center (stairs/doors flip correctly)
 around(n, cx, cz, (i) => {...}, startDeg)    n copies rotated around the vertical axis through (cx, cz); draw relative to it
 rng() rand(a,b) randInt(a,b) pick(arr) chance(p) noise(x,y,z,scale) lerp clamp range(a,b,step) log(...)
+cellRand(x,y,z,salt?) -> 0..1, the same for the same cell: per-block choices (`cellRand(x,y,z) < 0.3`) stay put when
+  you edit other code, while rng() draws shift whenever a call before them is added or removed.
 option('roof', ['gable','hipped','mansard'])   a design choice left open: returns the decided choice, else the first.
   The studio builds every choice of a new option and shows them side by side; decide({roof:'hipped'}) fixes one.
 

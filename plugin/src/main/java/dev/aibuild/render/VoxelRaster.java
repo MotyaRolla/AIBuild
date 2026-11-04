@@ -116,6 +116,52 @@ public final class VoxelRaster {
         return look(pos, at, 70, w, h);
     }
 
+    /**
+     * A player standing in front of {@code target} (side 0 = south, 1 = west, 2 = north, 3 = east): eye 1.62 above the
+     * surface where they stand, as close as lets the target fill the view, looking at its lower middle. Unlike
+     * {@link #eye}, which fits a whole scene into the frame from far away, this is the view a visitor judges the
+     * subject from; what stands in between stays in the picture, as it would in the game.
+     */
+    public static Camera stand(dev.aibuild.model.VoxelModel model, int[] target, int side, int w, int h) {
+        double fov = Math.toRadians(70), aspect = (double) w / h;
+        double vHalf = Math.atan(Math.tan(fov / 2) / Math.max(1, aspect));
+        double hHalf = Math.atan(Math.tan(fov / 2) * Math.min(1, aspect));
+        int sd = Math.floorMod(side, 4);
+        boolean alongX = sd == 1 || sd == 3;
+        double cx = (target[0] + target[3] + 1) / 2.0, cz = (target[2] + target[5] + 1) / 2.0;
+        double base = Math.max(target[1], 0), height = target[4] + 1 - base;
+        double width = alongX ? target[5] - target[2] + 1 : target[3] - target[0] + 1;
+        double depth = alongX ? target[3] - target[0] + 1 : target[5] - target[2] + 1;
+        double fit = Math.max(width / 2 / Math.tan(hHalf * 0.92), height * 0.62 / Math.tan(vHalf * 0.92));
+        double dist = Math.max(depth / 2 + 4, fit + depth / 2 * 0.5);
+        double[] off = switch (sd) {
+            case 1 -> new double[]{-dist, 0};
+            case 2 -> new double[]{0, -dist};
+            case 3 -> new double[]{dist, 0};
+            default -> new double[]{0, dist};
+        };
+        double px = cx + off[0], pz = cz + off[1];
+        int ground = surface(model, (int) Math.floor(px), (int) Math.floor(pz));
+        double eyeY = ground + 1 + 1.62;
+        double[] at = {cx, Math.max(eyeY, base + height * 0.45), cz};
+        return look(new double[]{px, eyeY, pz}, at, 70, w, h);
+    }
+
+    /** The highest solid cell of the column (water counts, plants and leaves do not), or 0 for open ground. */
+    public static int surface(dev.aibuild.model.VoxelModel model, int x, int z) {
+        int[] b = model.solidBounds();
+        if (b == null) return 0;
+        for (int y = b[4]; y >= Math.min(0, b[1]); y--) {
+            dev.aibuild.model.BlockSpec s = model.get(x, y, z);
+            if (s == null || s.isAir()) continue;
+            String n = s.name();
+            if (n.contains("leaves") || n.contains("grass") && !n.equals("grass_block") || n.contains("flower") || n.contains("petals")
+                    || n.contains("fern") || n.contains("carpet") || n.contains("vine") || n.endsWith("_log") || n.endsWith("_wood")) continue;
+            return y;
+        }
+        return 0;
+    }
+
     /** Perspective camera at {@code from} looking at {@code at} with a vertical/horizontal field of view (larger side). */
     public static Camera look(double[] from, double[] at, double fovDeg, int w, int h) {
         double[] f = sub(at, from);
