@@ -2879,7 +2879,9 @@ public final class BuildPipeline {
 
     private void say(Job job, String template, Object... args) {
         if (job.quiet) return;
-        Msg.to(job.owner, template, args);
+        // Buffered delivery: a player who left mid-build must still receive the rest when they return.
+        // Msg.to dropped the line for an offline player, which is why a reconnect looked like silence.
+        dev.aibuild.util.OfflineInbox.deliver(job.owner, template, args);
         LiveBroadcast lb = live(job);
         if (lb != LiveBroadcast.NOOP) {
             // the page wants the sentence, not the MiniMessage markup the chat layer understands

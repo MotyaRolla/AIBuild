@@ -89,6 +89,8 @@ public final class AIBuildPlugin extends JavaPlugin implements Listener {
         command = new AIBuildCommand(this);
         registerCommand("aibuild", "AI build generation and editing", List.of("aib", "ai"), command);
         getServer().getPluginManager().registerEvents(this, this);
+        // keeps a player informed when they leave and come back while a build is running
+        getServer().getPluginManager().registerEvents(new dev.aibuild.listen.PlayerPresenceListener(this), this);
         Bukkit.getScheduler().runTaskTimer(this, this::updateBars, 20L, 10L);
         loadTextureColours();
         getLogger().info("AIBuild enabled: model " + config.model + " via " + config.baseUrl + " (" + config.transport + "), "
