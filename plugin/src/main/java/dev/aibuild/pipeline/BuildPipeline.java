@@ -173,7 +173,7 @@ public final class BuildPipeline {
 
             @Override
             public void reasoning(String textSoFar) {
-                lb.reasoning(textSoFar);
+                lb.reasoning(kind, textSoFar);
             }
         };
     }
@@ -435,15 +435,17 @@ public final class BuildPipeline {
     private Staged designAndScript(Job job, Transcript tr, String prompt, Build build, Anchor anchor,
                                    boolean isRebuild) throws Exception {
         PluginConfig c = cfg.get();
+        ScriptRuntime runtime = new ScriptRuntime(info, job.stdlib);
+        // every AI stage from here on gets the user's words and, under them, the enhancer's brief
+        String ask = enhance(job, tr, prompt, runtime);
         job.status("ИИ пишет программу постройки…", 0.02);
         stageOf(job, "program", "Writing the build program");
         int ext = c.maxExtent;
         int[] safety = {-ext, -32, -ext, ext, Math.min(320, ext * 2), ext};
-        ScriptRuntime runtime = new ScriptRuntime(info, job.stdlib);
         ScriptRuntime.Budget budget = BuildMode.EXTRA.equals(job.mode.id) ? ScriptRuntime.Budget.extra() : ScriptRuntime.Budget.standard();
         long seed = build == null ? 1L : build.id.hashCode();
         int n = Math.max(1, c.scriptCandidates(job.mode.id));
-        List<Concepts.Concept> concepts = concepts(job, tr, prompt, runtime, n);
+        List<Concepts.Concept> concepts = concepts(job, tr, ask, runtime, n);
         List<Future<ScriptCandidate>> futures = new ArrayList<>();
         for (int i = 0; i < n; i++) {
             long candidateSeed = seed + i * 7919L;
@@ -451,7 +453,7 @@ public final class BuildPipeline {
             Consumer<ScriptResult> show = i == 0 ? streamingPreview(job, build, anchor) : null;
             // fewer concepts than candidates: the rest get the plain request
             String concept = i < concepts.size() ? concepts.get(i).forPrompt() : null;
-            futures.add(side.submit(() -> writeScript(job, tr, prompt, concept, candidateSeed, tag, runtime, budget, safety, show)));
+            futures.add(side.submit(() -> writeScript(job, tr, ask, concept, candidateSeed, tag, runtime, budget, safety, show)));
         }
         if (n > 1) say(job, "<gray>ИИ пишет <v0> независимых варианта программы, лучший выберет проверка.</gray>", n);
         List<ScriptCandidate> ok = new ArrayList<>();
@@ -476,7 +478,7 @@ public final class BuildPipeline {
             }
             throw new IllegalStateException("программа постройки не выполнилась");
         }
-        ScriptCandidate best = pickCandidate(job, tr, prompt, ok);
+        ScriptCandidate best = pickCandidate(job, tr, ask, ok);
         job.concept = best.concept();
         ScriptResult result = best.result();
         String source = best.source();
@@ -530,6 +532,38 @@ public final class BuildPipeline {
     }
 
     /**
+     * The request enhancer (when enabled for the mode): one call that works the user's words out into a brief
+     * (subject, what the request requires, what an expert would add, palette, what to avoid). Returns the
+     * request for the AI stages: the user's words, with the brief attached when there is one. Without a usable
+     * answer the build goes on from the plain request.
+     */
+    private String enhance(Job job, Transcript tr, String prompt, ScriptRuntime runtime) throws CancelledException {
+        PluginConfig c = cfg.get();
+        boolean on = job.enhance != null ? job.enhance : c.enhance(job.mode.id);
+        if (!on) return prompt;
+        job.status("ИИ уточняет задачу…", 0.005);
+        stageOf(job, "enhance", "Working out the request");
+        try {
+            String answer = callRaw(job, tr, "enhance", List.of(
+                    ChatMessage.user(ScriptPrompts.enhance(prompt, scaleHint(job.mode, runtime.stdlib())))),
+                    c.enhanceEffort, job.mode.maxTokens, false);
+            String brief = ScriptPrompts.parseBrief(answer);
+            tr.note("enhance", brief == null ? "unreadable:\n" + answer : brief);
+            if (brief == null) return prompt;
+            job.brief = brief;
+            String subject = brief.lines().findFirst().orElse("").replaceFirst("^SUBJECT:\\s*", "");
+            verdict(job, "enhance", "Request brief", true, subject, null, null);
+            return Prompts.withBrief(prompt, brief);
+        } catch (CancelledException e) {
+            throw e;
+        } catch (Exception e) {
+            plugin.getLogger().log(Level.WARNING, "request enhancer failed", e);
+            tr.note("enhance", "failed: " + e);
+            return prompt;
+        }
+    }
+
+    /**
      * The lead designer's concepts for {@code n} candidates (3.0 library only, when enabled): one cheap call before
      * the scripts. Empty when off or when the answer is unusable, so the candidates get the plain request.
      */
@@ -574,6 +608,10 @@ public final class BuildPipeline {
         List<ChatMessage> msgs = new ArrayList<>();
         msgs.add(ChatMessage.system(ScriptPrompts.system(runtime.stdlib(), c.includeBlockList ? blockList.get() : null)));
         msgs.add(ChatMessage.user(ScriptPrompts.create(runtime.stdlib(), prompt, scaleHint(job.mode, runtime.stdlib()), concept)));
+        // each candidate has its own stream on the page; only the first one's build is drawn while it is written,
+        // or the picture would flip between candidates with every partial run
+        String kind = tag.startsWith("script-c") ? "program-c" + tag.substring("script-c".length()) : "program";
+        boolean lead = !tag.startsWith("script-c") || tag.equals("script-c1");
         for (int attempt = 0; attempt <= c.scriptRepairAttempts; attempt++) {
             LiveScript live = new LiveScript(runtime, seed, safety, budget, job.cancelled, side,
                     partial -> {
@@ -583,17 +621,18 @@ public final class BuildPipeline {
                         // switch governs the in-world preview, and a viewer who opened the live link still
                         // expects to watch the AI's program take shape.
                         LiveBroadcast lb = live(job);
-                        if (lb != LiveBroadcast.NOOP) {
+                        if (lead && lb != LiveBroadcast.NOOP) {
                             lb.preview(true, partial.model().nonAirCount(), partial.model().size());
                             lb.model(partial.model(), "stream");
                         }
                     },
                     part -> {
+                        if (!lead) return;
                         job.status("ИИ пишет часть «" + clip(part, 40) + "»…", job.progress);
                         LiveSession s = liveLinks == null ? null : liveLinks.forBuild(job.buildId);
                         if (s != null) s.part(part);
                     });
-            live.codeKind(attempt == 0 ? "program" : "repair" + attempt).broadcast(live(job));
+            live.codeKind(attempt == 0 ? kind : kind + "-repair" + attempt).broadcast(live(job));
             String answer;
             try {
                 answer = callText(job, tr, attempt == 0 ? tag : tag + "-repair" + attempt, job.mode.effortBuild, msgs, live);
@@ -628,7 +667,7 @@ public final class BuildPipeline {
             if (result.ok()) {
                 prepare(result);
                 if (show != null) show.accept(result);
-                JsonObject plan = planFromScript(result, prompt);
+                JsonObject plan = planFromScript(result, Prompts.userWords(prompt));
                 return new ScriptCandidate(source, result, seed, plan,
                         StructureAnalyzer.analyze(result.model(), info, analyzerOptions(plan)), concept);
             }
@@ -636,7 +675,7 @@ public final class BuildPipeline {
             // The page shows a failed run too: a viewer watching the program stop needs to know it stopped,
             // and the event carries `ok` precisely so the two outcomes are distinguishable.
             LiveBroadcast failed = live(job);
-            if (failed != LiveBroadcast.NOOP) failed.preview(false, result.model().nonAirCount(), source.length());
+            if (lead && failed != LiveBroadcast.NOOP) failed.preview(false, result.model().nonAirCount(), source.length());
             plugin.getLogger().info("[" + tag + "] attempt " + attempt + " failed: " + result.error().message());
             if (attempt < c.scriptRepairAttempts) {
                 say(job, "<gray>Программа остановилась: <white><v0></white>. ИИ исправляет…</gray>", clip(result.error().message(), 160));
@@ -788,7 +827,10 @@ public final class BuildPipeline {
         job.calls.incrementAndGet();
         ChatResult res;
         try {
-            res = llm.get().chat(new ChatRequest(c.model, msgs, maxTokens, c.temperature, effort, json), (cc, rc) -> { }, job.cancelled);
+            // the page shows what a concept writer, director or judge is thinking, not only the program writers
+            StreamListener shown = tag.equals("vision-probe") ? null : codeStream(job, tag);
+            res = llm.get().chat(new ChatRequest(c.model, msgs, maxTokens, c.temperature, effort, json),
+                    shown != null ? shown : (cc, rc) -> { }, job.cancelled);
         } catch (LlmException e) {
             if ("cancelled".equals(e.code()) || job.cancelled.get()) throw new CancelledException();
             throw e;
@@ -903,6 +945,8 @@ public final class BuildPipeline {
                     if (r != null) ok.add(r);
                 } catch (java.util.concurrent.TimeoutException e) {
                     tr.note("sculpt" + (i + 1) + " timed out", picks.get(i)[0] + ": still working after " + c.sculptTimeout + " s, part left as it was");
+                    verdict(job, "sculpt:" + leaf(picks.get(i)[0]), "Sculptor · " + leaf(picks.get(i)[0]), false,
+                            "still working after " + c.sculptTimeout + " s", null, null);
                 } catch (CancelledException e) {
                     if (job.cancelled.get()) throw e;
                 } catch (Exception e) {
@@ -930,6 +974,8 @@ public final class BuildPipeline {
             List<String> worse = QualityVector.of(nrep, run).regressions(q0);
             if (!worse.isEmpty()) {
                 tr.note("sculpt merge dropped " + r.name(), "together with the other rewrites: " + String.join(", ", worse));
+                verdict(job, "sculpt:" + r.name(), "Sculptor · " + r.name(), false,
+                        "together with the other rewrites it " + String.join(", ", worse), null, null);
                 continue;
             }
             merged = patch.source();
@@ -941,6 +987,7 @@ public final class BuildPipeline {
             int pref = judge(job, tr, prompt, sheet(model), sheet(mergedResult.model()));
             if (pref < 0) {
                 tr.note("sculpt rejected", "the judge preferred the previous build; parts: " + kept);
+                verdict(job, "sculpt", "Sculptors", false, "the judge preferred the build before the rewrites of " + kept, null, null);
                 say(job, "<gray>Доработка частей отклонена: прежний вариант смотрится лучше.</gray>");
                 return null;
             }
@@ -1003,10 +1050,10 @@ public final class BuildPipeline {
                 + part.bounds()[4] + ", z " + part.bounds()[2] + ".." + part.bounds()[5];
         List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
                 ChatMessage.user(ScriptPrompts.sculptor(prompt, job.concept, name, bounds, brief, current, source, true, refine(job)), List.of(img))));
-        String answer = callText(job, tr, tag, effort, msgs, null, stop);
+        String answer = callText(job, tr, tag, effort, msgs, codeStream(job, "sculpt:" + name), stop);
+        String problem = null;
         for (int attempt = 0; attempt < 2; attempt++) {
             ScriptPatch.Result patch = ScriptPatch.replacePart(source, name, answer);
-            String problem;
             if (patch.ok()) {
                 ScriptResult run = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
                 if (run.ok()) {
@@ -1037,8 +1084,9 @@ public final class BuildPipeline {
             msgs = new ArrayList<>(msgs);
             msgs.add(ChatMessage.assistant(answer));
             msgs.add(ChatMessage.user(ScriptPrompts.revisionFailed(problem)));
-            answer = callText(job, tr, tag + "-fix", effort, msgs, null, stop);
+            answer = callText(job, tr, tag + "-fix", effort, msgs, codeStream(job, "sculpt:" + name), stop);
         }
+        verdict(job, "sculpt:" + name, "Sculptor · " + name, false, problem, null, null);
         return null;
     }
 
@@ -1142,10 +1190,10 @@ public final class BuildPipeline {
                 target == null ? null : ScriptPatch.partSource(source, target), source, eyes);
         List<ChatMessage> msgs = new ArrayList<>(List.of(ChatMessage.system(system),
                 eyes ? ChatMessage.user(user, List.of(interiorSheet(model, rooms))) : ChatMessage.user(user)));
-        String answer = callText(job, tr, "interior", cfg.get().sculptEffort, msgs, null, stop);
+        String answer = callText(job, tr, "interior", cfg.get().sculptEffort, msgs, codeStream(job, "interior"), stop);
+        String problem = null;
         for (int attempt = 0; attempt < 2; attempt++) {
             ScriptPatch.Result patch = ScriptPatch.putPart(source, name, answer);
-            String problem;
             if (patch.ok()) {
                 ScriptResult run = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
                 if (run.ok()) {
@@ -1180,8 +1228,9 @@ public final class BuildPipeline {
             msgs = new ArrayList<>(msgs);
             msgs.add(ChatMessage.assistant(answer));
             msgs.add(ChatMessage.user(ScriptPrompts.revisionFailed(problem)));
-            answer = callText(job, tr, "interior-fix", cfg.get().sculptEffort, msgs, null, stop);
+            answer = callText(job, tr, "interior-fix", cfg.get().sculptEffort, msgs, codeStream(job, "interior"), stop);
         }
+        verdict(job, "interior", "Interior designer", false, problem, null, null);
         return null;
     }
 
@@ -1197,6 +1246,7 @@ public final class BuildPipeline {
         ScriptResult run = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
         if (!run.ok()) {
             tr.note("interior rejected", "fails on the current script:\n" + run.error().describe());
+            verdict(job, "interior", "Interior designer", false, "the program fails with it: " + run.error().describe(), null, null);
             return null;
         }
         prepare(run);
@@ -1204,6 +1254,7 @@ public final class BuildPipeline {
         List<String> worse = QualityVector.of(nrep, run).regressions(q0);
         if (!worse.isEmpty()) {
             tr.note("interior rejected", "makes the current build worse: " + String.join(", ", worse));
+            verdict(job, "interior", "Interior designer", false, "makes the build worse: " + String.join(", ", worse), null, null);
             return null;
         }
         int before = rep.roomList.stream().mapToInt(AnalysisReport.Room::furniture).sum();
@@ -1242,10 +1293,17 @@ public final class BuildPipeline {
         liveParts(job, r.result());
     }
 
-    /** A stage's quality row and picture in the job log. */
-    private void snapshot(Transcript tr, String stage, VoxelModel model, QualityVector q) {
+    /** A kept stage's quality row and picture in the job log, and its row on the live page. */
+    private void snapshot(Job job, Transcript tr, String stage, String title, String why, VoxelModel model, QualityVector q) {
         tr.quality(stage, q);
         if (cfg.get().stageSnapshots) tr.image("stage-" + stage, sheet(model));
+        verdict(job, stage, title, true, why, q, model);
+    }
+
+    /** A review stage's outcome on the live page; {@code q} is the quality the build has after it. */
+    private void verdict(Job job, String stage, String title, boolean kept, String why, QualityVector q, VoxelModel model) {
+        LiveBroadcast lb = live(job);
+        if (lb != LiveBroadcast.NOOP) lb.verdict(stage, title, kept, why, q == null ? null : q.metrics(), kept ? model : null);
     }
 
     /**
@@ -1264,6 +1322,7 @@ public final class BuildPipeline {
         ScriptResult run = runtime.run(patch.source(), job.scriptSeed, null, limits, budget, job.cancelled);
         if (!run.ok()) {
             tr.note("finish rejected", run.error().describe());
+            verdict(job, "finish", "Finisher", false, "the repaired program fails: " + run.error().describe(), q, null);
             return null;
         }
         prepare(run);
@@ -1271,11 +1330,12 @@ public final class BuildPipeline {
         List<String> worse = QualityVector.of(nrep, run).regressions(q);
         if (!worse.isEmpty()) {
             tr.note("finish rejected", String.join(", ", worse) + "\n" + f.notes());
+            verdict(job, "finish", "Finisher", false, "the repairs would make it worse: " + String.join(", ", worse), q, null);
             return null;
         }
         tr.note("finish", f.edits() + " repairs: " + String.join("; ", f.notes()));
         say(job, "<gray>Доводка: <v0> исправлений (<v1>).</gray>", f.edits(), clip(String.join("; ", f.notes()), 200));
-        return new Revision(patch.source(), run, "finisher");
+        return new Revision(patch.source(), run, f.edits() + " repairs: " + String.join("; ", f.notes()));
     }
 
     /**
@@ -1284,8 +1344,10 @@ public final class BuildPipeline {
      * reach the model) the pairwise judge does not prefer the previous build. Approval is deterministic: no
      * critical or major analyzer findings; the model's self-score is not used.
      */
-    private Verdict verifyScript(Job job, Transcript tr, Build build, Staged st, String prompt) throws Exception {
+    private Verdict verifyScript(Job job, Transcript tr, Build build, Staged st, String request) throws Exception {
         PluginConfig c = cfg.get();
+        // the director, sculptors, interior designer, critics and judges read the same brief as the writers
+        String prompt = Prompts.withBrief(request, job.brief);
         int rounds = job.criticRounds != null ? job.criticRounds : c.criticRounds(job.mode.id);
         AnalyzerOptions aopts = analyzerOptions(st.plan);
         ScriptRuntime runtime = new ScriptRuntime(info, job.stdlib);
@@ -1308,7 +1370,7 @@ public final class BuildPipeline {
         if (cur.ok()) prepare(cur);
         else cur = null;
         QualityVector q = QualityVector.of(rep, cur);
-        snapshot(tr, "design", model, q);
+        snapshot(job, tr, "design", "First design", "the program as written" + (job.concept == null ? "" : ", following its concept"), model, q);
         if (sculptors > 0 && eyes) {
             Revision sr = sculpt(job, tr, prompt, runtime, budget, limits, system, source, model, rep, aopts, sculptors);
             if (sr != null) {
@@ -1319,7 +1381,7 @@ public final class BuildPipeline {
                 cur = sr.result();
                 q = QualityVector.of(rep, cur);
                 adopt(job, build, st, sr);
-                snapshot(tr, "sculpt", model, q);
+                snapshot(job, tr, "sculpt", "Sculptors", sr.diagnosis(), model, q);
             }
         }
         // the interior designer works on the sculpted build, not on a copy from before the sculptors: rooms they
@@ -1341,6 +1403,7 @@ public final class BuildPipeline {
                 if (r != null) ir = mergeInterior(job, tr, prompt, runtime, budget, limits, source, model, rep, aopts, r, q);
             } catch (java.util.concurrent.TimeoutException e) {
                 tr.note("interior timed out", "still working after " + c.sculptTimeout + " s, rooms left as they were");
+                verdict(job, "interior", "Interior designer", false, "still working after " + c.sculptTimeout + " s", q, null);
             } catch (CancelledException e) {
                 if (job.cancelled.get()) throw e;
             } catch (Exception e) {
@@ -1356,7 +1419,7 @@ public final class BuildPipeline {
                 cur = ir.result();
                 q = QualityVector.of(rep, cur);
                 adopt(job, build, st, ir);
-                snapshot(tr, "interior", model, q);
+                snapshot(job, tr, "interior", "Interior designer", ir.diagnosis(), model, q);
             }
         }
         // the frozen 2.0 bench variant fixes its rounds and keeps them all
@@ -1390,6 +1453,7 @@ public final class BuildPipeline {
             v.reviewerCalls++;
             if (isDone(answer)) {
                 tr.note("critic" + round + " done", "the critic found nothing left to improve");
+                verdict(job, "critic" + round, "Critic round " + round, false, "nothing left to improve", q, null);
                 say(job, "<gray>Критик: улучшать больше нечего.</gray>");
                 break;
             }
@@ -1397,6 +1461,7 @@ public final class BuildPipeline {
             String what = diagnosis(answer);
             if (r == null) {
                 rejected.add(clip(what, 200) + " — did not apply or run");
+                verdict(job, "critic" + round, "Critic round " + round, false, "the edit did not apply or the program failed", q, null);
                 say(job, "<gray>Раунд <v0>: правку не удалось применить.</gray>", round);
                 continue;
             }
@@ -1413,6 +1478,7 @@ public final class BuildPipeline {
             if (gate != null) {
                 rejected.add(clip(what, 200) + " — rejected: " + gate);
                 tr.note("critic" + round + " rejected", gate + "\n" + what);
+                verdict(job, "critic" + round, "Critic round " + round, false, gate, nq, null);
                 say(job, "<gray>Раунд <v0>: правка отклонена (<v1>).</gray>", round, gate);
                 continue;
             }
@@ -1423,7 +1489,7 @@ public final class BuildPipeline {
             cur = r.result();
             q = nq;
             adopt(job, build, st, r);
-            snapshot(tr, "critic" + round, model, q);
+            snapshot(job, tr, "critic" + round, "Critic round " + round, clip(what.replace("DIAGNOSIS:", "").strip(), 300), model, q);
             say(job, "<gray>Раунд <v0>: улучшено — <white><v1></white></gray>", round, clip(what.replace("DIAGNOSIS:", "").strip(), 180));
         }
         if (c.finisher && cur != null) {
@@ -1434,7 +1500,7 @@ public final class BuildPipeline {
                 rep = StructureAnalyzer.analyze(model, info, aopts);
                 q = QualityVector.of(rep, fr.result());
                 adopt(job, build, st, fr);
-                snapshot(tr, "finish", model, q);
+                snapshot(job, tr, "finish", "Finisher", fr.diagnosis(), model, q);
             }
         }
         job.scriptModel = model.copy();
@@ -3159,7 +3225,7 @@ public final class BuildPipeline {
                         think.setLength(0);
                         think.append(textSoFar == null ? "" : textSoFar);
                         LiveBroadcast lb = live(job);
-                        if (lb != LiveBroadcast.NOOP) lb.reasoning(textSoFar);
+                        if (lb != LiveBroadcast.NOOP) lb.reasoning(tag, textSoFar);
                     }
                 }, job.cancelled);
             } catch (LlmException e) {

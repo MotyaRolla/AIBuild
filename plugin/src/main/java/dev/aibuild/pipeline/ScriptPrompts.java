@@ -143,16 +143,16 @@ public final class ScriptPrompts {
     public static String create(Stdlib lib, String request, String scale, String concept) {
         if (lib == Stdlib.V1) {
             return """
-                    BUILD REQUEST: "%s"
+                    %s
 
                     Write the complete build script. %s
                     Think about the subject's real appearance from every side before writing code, then write the script
                     directly (do not enumerate coordinates in your thoughts — compute them in code).
-                    """.formatted(Prompts.escape(request), scale);
+                    """.formatted(Prompts.request("BUILD REQUEST", request), scale);
         }
         String recipes = Recipes.forRequest(lib, request);
         return """
-                BUILD REQUEST: "%s"
+                %s
 
                 %s
                 %s
@@ -162,7 +162,7 @@ public final class ScriptPrompts {
                 3. The setting that frames it, and the focal areas that get the most detail.
                 4. How you avoid the failure modes (flat walls, visible primitives, single-block surfaces).
                 Then write the complete build script. %s
-                """.formatted(Prompts.escape(request), recipes.isBlank() ? "" : recipes,
+                """.formatted(Prompts.request("BUILD REQUEST", request), recipes.isBlank() ? "" : recipes,
                 concept == null ? "" : "\nDESIGN CONCEPT for your version (follow it; where it conflicts with the request, the request wins):\n"
                         + concept + "\n", scale);
     }
@@ -174,7 +174,7 @@ public final class ScriptPrompts {
     public static String concepts(Stdlib lib, String request, String scale, int n) {
         String recipes = Recipes.forRequest(lib, request);
         return """
-                BUILD REQUEST: "%s"
+                %s
 
                 %s
 
@@ -190,12 +190,49 @@ public final class ScriptPrompts {
                 - Palette: 4-6 real block ids with roles (main, structure, roof or body, accent, ground).
                 - Say which kits build which parts (volume, roof, tower, tree, ...).
                 Each brief is under 120 words, in English; each name is 2-5 words in the request's language.
-                Answer with ONE JSON object: {"concepts":[{"name":"...","brief":"..."}]}""".formatted(Prompts.escape(request),
+                Answer with ONE JSON object: {"concepts":[{"name":"...","brief":"..."}]}""".formatted(Prompts.request("BUILD REQUEST", request),
                 recipes.isBlank() ? "" : recipes,
                 n == 1 ? "A builder will write a build script for this request." : n + " builders will each write a build script for this request, one concept each.",
                 n,
                 n == 1 ? "" : "\n- The concepts differ in layout and silhouette (plan shape, massing, roof forms, pose or composition),\n  not only in colours or decoration.",
                 scale);
+    }
+
+    /**
+     * The request enhancer: turns a short, often misspelled or non-English request into a brief every later
+     * stage can build from, without adding requirements the user did not make. REQUIRED restates the request;
+     * SUGGESTED is what an expert would add for this subject and style, which concepts and builders may vary.
+     */
+    public static String enhance(String request, String scale) {
+        return """
+                BUILD REQUEST: "%s"
+
+                You are the lead designer of a Minecraft build team. Before anything is designed, work this request
+                out into a brief the builders can follow. Do not write code and do not design one specific layout.
+
+                Answer in English, under 260 words, in exactly these sections:
+                SUBJECT: what is built, in one sentence, typos fixed and translated.
+                REQUIRED: every fact the request states, each as one line: sizes, counts, materials, style, period,
+                  named elements, setting. Keep the user's numbers exactly. Say how an ambiguous size is read: a
+                  footprint size is the subject itself (a castle's walls, a house's outer walls), not its terrain.
+                SUGGESTED: 6-10 lines an expert would add for this subject and style, so it is unmistakable and
+                  rich: signature elements with their real names (for a German castle: Bergfried, Palas, Zwinger,
+                  Torhaus...), proportions, roof forms, wall details, the rooms that belong inside, the setting.
+                  Only what fits the request; nothing that changes what it asks for.
+                PALETTE: 5-8 real Minecraft block ids with their roles (walls, trim, roof, floor, accent, ground).
+                AVOID: 2-4 lines on what would make this read wrong (wrong period, wrong scale, a hidden subject).
+
+                %s""".formatted(Prompts.escape(request), scale);
+    }
+
+    /** The brief in an enhancer answer: the sections without any fence or preamble, or null when there are none. */
+    public static String parseBrief(String answer) {
+        if (answer == null) return null;
+        String s = answer.replaceAll("(?m)^```[a-z]*\\s*$", "").strip();
+        int at = s.indexOf("SUBJECT:");
+        if (at < 0 || !s.contains("REQUIRED:")) return null;
+        s = s.substring(at).strip();
+        return s.length() > 3000 ? s.substring(0, 3000) : s;
     }
 
     /** Asks for a corrected full script after a failed run. */
@@ -226,7 +263,7 @@ public final class ScriptPrompts {
     public static String critic(String request, String script, String evidence, String parts, boolean image, int round, int rounds,
                                 java.util.List<String> rejected) {
         return """
-                BUILD REQUEST: "%s"
+                %s
                 CRITIC ROUND %d of %d. %s
                 Judge the build the way a demanding human would when comparing it with another builder's version:
                 recognizability and proportions first, then form (flat walls, visible raw boxes, missing depth, stiff
@@ -254,7 +291,7 @@ public final class ScriptPrompts {
                 %s
 
                 CURRENT SCRIPT:
-                %s""".formatted(Prompts.escape(request), round, rounds,
+                %s""".formatted(Prompts.request("BUILD REQUEST", request), round, rounds,
                 image ? "The attached image shows the current build from four sides (front = south) in real block colours;"
                         + " a second image, when attached, shows its rooms from above with everything higher removed."
                         : "No image is available; rely on the analysis and the script.",
@@ -277,7 +314,7 @@ public final class ScriptPrompts {
      */
     public static String director(String request, String concept, String parts, String evidence, int max, boolean refine) {
         return """
-                BUILD REQUEST: "%s"
+                %s
                 %s                You are the art director of this build. The attached image shows it from four sides, at eye level and
                 from the top. Decide which parts would gain the most from a master builder's rework: weak or stiff
                 silhouettes, flat walls or single-block surfaces, visible primitives, missing signature details of the
@@ -291,7 +328,7 @@ public final class ScriptPrompts {
                 PARTS (name: blocks and bounds):
                 %s
                 AUTOMATIC ANALYSIS:
-                %s""".formatted(Prompts.escape(request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n", max,
+                %s""".formatted(Prompts.request("BUILD REQUEST", request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n", max,
                 refine ? """
                         what is weak and what to add or change on the existing part (trims, frames, depth layers,
                         partial blocks, shading, signature details, kit options). The sculptor refines the part and keeps
@@ -315,7 +352,7 @@ public final class ScriptPrompts {
     public static String sculptor(String request, String concept, String name, String bounds, String brief, String partSource,
                                   String script, boolean image, boolean refine) {
         if (refine) return """
-                BUILD REQUEST: "%s"
+                %s
                 %sYou are a master builder. Refine ONE part of this build: part('%s'), currently %s (world coordinates).
                 The rest of the build stays as it is. Keep this part's structure: its masses, footprint, heights, roof
                 forms and position, and the kit calls that build them (volume, roof, tower, tree, ...). Change a kit's
@@ -338,11 +375,11 @@ public final class ScriptPrompts {
                 %s
                 ```
                 WHOLE SCRIPT (read-only context):
-                %s""".formatted(Prompts.escape(request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n", name, bounds, brief,
+                %s""".formatted(Prompts.request("BUILD REQUEST", request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n", name, bounds, brief,
                 image ? "The attached image shows close-ups of this part in the build." : "", name, partSource,
                 dev.aibuild.script.ScriptPatch.numbered(script));
         return """
-                BUILD REQUEST: "%s"
+                %s
                 You are a master builder. Rewrite ONE part of this build: part('%s'), currently %s (world coordinates).
                 The rest of the build stays as it is, so keep this part where it is and connected to its neighbours
                 (stay within about 3 blocks of its current bounds unless the brief asks for more).
@@ -361,7 +398,7 @@ public final class ScriptPrompts {
                 %s
                 ```
                 WHOLE SCRIPT (read-only context):
-                %s""".formatted(Prompts.escape(request), name, bounds, brief,
+                %s""".formatted(Prompts.request("BUILD REQUEST", request), name, bounds, brief,
                 image ? "The attached image shows close-ups of this part in the build." : "", name, partSource,
                 dev.aibuild.script.ScriptPatch.numbered(script));
     }
@@ -373,7 +410,7 @@ public final class ScriptPrompts {
     public static String interior(String request, String concept, String rooms, String name, String current, String script,
                                   boolean image) {
         return """
-                BUILD REQUEST: "%s"
+                %s
                 %sYou are the interior designer of this build. Players walk into every room and judge it like the facade.
                 %s
                 ROOMS FOUND INSIDE (y = the layer players stand in; furniture there; furnish() takes the floor layer y-1):
@@ -403,7 +440,7 @@ public final class ScriptPrompts {
                 helpers inside it. You may use the script's top-level variables and functions.
 
                 WHOLE SCRIPT (read-only context):
-                %s""".formatted(Prompts.escape(request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n",
+                %s""".formatted(Prompts.request("BUILD REQUEST", request), concept == null ? "" : "DESIGN CONCEPT: " + concept + "\n",
                 image ? "The attached image shows each room from above with everything higher removed." : "",
                 rooms,
                 current == null ? "Your statement is added at the end of the script, after everything else."
@@ -446,7 +483,7 @@ public final class ScriptPrompts {
             Answer with ONE JSON object: {"winner":"A"|"B"|"tie","reasons":["...","...","..."]}""";
 
     public static String judge(String request) {
-        return "REQUEST: \"" + Prompts.escape(request) + "\"\nThe first image is build A, the second image is build B "
+        return Prompts.request("REQUEST", request) + "\nThe first image is build A, the second image is build B "
                 + "(each shows four sides of the build). Which build is better?";
     }
 

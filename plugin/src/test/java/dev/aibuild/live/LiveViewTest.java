@@ -31,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -461,10 +462,10 @@ class LiveViewTest {
 
             assertTrue(recorder.of("stage").size() >= 1, "stage replay: " + recorder.types());
             assertTrue(recorder.of("note").size() >= 1, "transcript replay: " + recorder.types());
-            String newestCode = recorder.of("code").get(recorder.of("code").size() - 1)
-                    .getAsJsonObject().get("text").getAsString();
-            assertTrue(newestCode.endsWith("})"), "only the newest program text is kept, got: " + newestCode);
-            assertFalse(recorder.of("code").get(0).getAsJsonObject().get("text").getAsString().isEmpty());
+            String newestCode = replay(recorder.of("code"), "program");
+            assertTrue(newestCode.endsWith("})"), "the program text adds up to the newest one, got: " + newestCode);
+            assertFalse(recorder.of("code").get(0).getAsJsonObject().get("text").getAsString().isEmpty(),
+                    "a stream's first frame carries its whole text");
 
             JsonObject model = recorder.of("model").get(0).getAsJsonObject();
             assertEquals("/live/0123456789abcdef0123456789abcdef/model.bin", model.get("url").getAsString());
@@ -587,5 +588,88 @@ class LiveViewTest {
             Thread.sleep(10);
         }
         throw new AssertionError("condition not met within " + timeoutMs + " ms");
+    }
+
+    /** Applies code or think frames of one stream the way the page does: whole texts replace, appends extend. */
+    private static String replay(List<com.google.gson.JsonElement> frames, String kind) {
+        String text = "";
+        for (var f : frames) {
+            JsonObject o = f.getAsJsonObject();
+            if (!kind.equals(o.get("kind").getAsString())) continue;
+            if (o.has("text")) text = o.get("text").getAsString();
+            else {
+                int at = o.get("at").getAsInt();
+                assertEquals(text.length(), at, "an append continues exactly where the previous frame ended");
+                text = text + o.get("append").getAsString();
+            }
+        }
+        return text;
+    }
+
+    @Test
+    void parallelStreamsStayApartAndGrowByAppending() throws Exception {
+        Job job = new Job("str123", null, Job.Kind.CREATE, "a cottage", BuildMode.defaults().get(BuildMode.STANDARD));
+        LiveSession session = new LiveSession("0123456789abcdef0123456789abcdef", job, "Cottage", "Steve", new StubBlockInfo());
+        try {
+            Recording recorder = new Recording();
+            session.subscribe(recorder);
+            StringBuilder a = new StringBuilder(), b = new StringBuilder();
+            for (int i = 0; i < 40; i++) {
+                a.append("box(").append(i).append(",1,1, 2,2,2, 'stone');\n");
+                b.append("// other candidate ").append(i).append('\n');
+                session.code("program-c1", a);
+                session.reasoning("program-c1", "thinking about line " + i);
+                session.code("program-c2", b);
+                Thread.sleep(2);
+            }
+            await(() -> replay(recorder.of("code"), "program-c1").contentEquals(a)
+                    && replay(recorder.of("code"), "program-c2").contentEquals(b), 5_000);
+            long whole = recorder.of("code").stream().filter(f -> f.getAsJsonObject().has("text")).count();
+            assertTrue(whole <= 2, "after its first frame a growing stream only sends what was added, got " + whole + " whole frames");
+            assertTrue(replay(recorder.of("think"), "program-c1").startsWith("thinking about line"),
+                    "reasoning is kept per stream too");
+
+            JsonObject state = com.google.gson.JsonParser.parseString(session.bootstrapJson()).getAsJsonObject();
+            assertEquals("a cottage", state.get("request").getAsString(), "the page shows what was asked for");
+            var code = state.getAsJsonArray("code");
+            assertEquals(2, code.size(), "one entry per stream");
+            assertEquals(a.toString(), code.get(0).getAsJsonObject().get("text").getAsString());
+            assertTrue(code.get(0).getAsJsonObject().get("think").getAsString().startsWith("thinking"));
+        } finally {
+            session.shutdown();
+        }
+    }
+
+    @Test
+    void keptStagesKeepTheirBuildAndRejectedOnesTheirReason() throws Exception {
+        Job job = new Job("vrd123", null, Job.Kind.CREATE, "a cottage", BuildMode.defaults().get(BuildMode.STANDARD));
+        LiveSession session = new LiveSession("0123456789abcdef0123456789abcdef", job, "Cottage", "Steve", new StubBlockInfo());
+        try {
+            Recording recorder = new Recording();
+            session.subscribe(recorder);
+            java.util.Map<String, Integer> q = new java.util.LinkedHashMap<>();
+            q.put("floating", 12);
+            q.put("rooms", 2);
+            session.verdict("design", "First design", true, "as written", q, cottage());
+            session.verdict("sculpt:roof", "Sculptor · roof", false, "<red>removes 57 blocks</red> of other parts", null, null);
+            await(() -> recorder.of("verdict").size() == 2, 5_000);
+
+            JsonObject kept = recorder.of("verdict").get(0).getAsJsonObject();
+            assertTrue(kept.get("kept").getAsBoolean());
+            assertEquals(12, kept.getAsJsonObject("quality").get("floating").getAsInt());
+            assertEquals("/live/0123456789abcdef0123456789abcdef/stage/0.bin", kept.get("url").getAsString());
+            assertTrue(ModelPackWriter.looksValid(session.stagePack(0)), "the stage's build can be shown again");
+
+            JsonObject rejected = recorder.of("verdict").get(1).getAsJsonObject();
+            assertFalse(rejected.get("kept").getAsBoolean());
+            assertFalse(rejected.has("url"), "a rejected stage changed nothing to look at");
+            assertEquals("removes 57 blocks of other parts", rejected.get("why").getAsString());
+            assertNull(session.stagePack(1));
+
+            JsonObject state = com.google.gson.JsonParser.parseString(session.bootstrapJson()).getAsJsonObject();
+            assertEquals(2, state.getAsJsonArray("verdicts").size(), "a late viewer sees every stage so far");
+        } finally {
+            session.shutdown();
+        }
     }
 }

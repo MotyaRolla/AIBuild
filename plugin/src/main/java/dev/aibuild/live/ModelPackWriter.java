@@ -235,7 +235,9 @@ public final class ModelPackWriter {
         // facing/half, slabs have type), and a server-independent BlockInfo may not expose every property.
         String name = spec.name();
         if (name.endsWith("_stairs")) {
-            return new int[]{ModelPack.Shapes.STAIRS, facing(prop(spec, info, "facing"))};
+            // upside-down stairs (eaves, arches) set bit 3, so the page puts the step under the full half
+            int up = "top".equals(prop(spec, info, "half")) ? ModelPack.Facing.UPSIDE_DOWN : 0;
+            return new int[]{ModelPack.Shapes.STAIRS, facing(prop(spec, info, "facing")) | up};
         }
         if (name.endsWith("_slab")) {
             boolean top = "top".equals(prop(spec, info, "type")) || "top".equals(prop(spec, info, "half"));

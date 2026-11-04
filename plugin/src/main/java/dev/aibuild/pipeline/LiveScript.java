@@ -87,7 +87,7 @@ final class LiveScript implements StreamListener {
     public void reasoning(String textSoFar) {
         reasoningSoFar = textSoFar == null ? "" : textSoFar;
         LiveBroadcast lb = broadcast;
-        if (lb != null) lb.reasoning(reasoningSoFar);
+        if (lb != null) lb.reasoning(codeKind, reasoningSoFar);
     }
 
     @Override

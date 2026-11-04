@@ -100,6 +100,19 @@ class LiveViewServerTest {
     }
 
     @Test
+    void aKeptStageIsServedByNumberAndAnUnknownOneIs404() throws Exception {
+        byte[] pack = {'A', 'I', 'B', 'L', 'V', '0', '2', 'X', 4, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, '{', '}', ' ', ' '};
+        try (LiveViewServer server = start(new PackFeed(TOKEN, pack), null)) {
+            HttpResponse<byte[]> kept = getBytes(server, "/live/" + TOKEN + "/stage/0.bin");
+            assertEquals(200, kept.statusCode());
+            assertArrayEquals(pack, kept.body(), "the stage's build crosses the wire byte for byte");
+            assertEquals(404, getBytes(server, "/live/" + TOKEN + "/stage/7.bin").statusCode(), "a stage that kept no build");
+            assertEquals(404, getBytes(server, "/live/" + TOKEN + "/stage/../model.bin").statusCode(), "only numbers address a stage");
+            assertEquals(404, getBytes(server, "/live/" + TOKEN + "/stage/x.bin").statusCode());
+        }
+    }
+
+    @Test
     void modelBinServesPackBytesOnlyWhenTheFeedProvidesThem() throws Exception {
         // A minimal, well-shaped v2 pack: 20-byte header, then a 4-byte padded payload. The bytes are
         // arbitrary on purpose; this test is about transport, not about what the encoder produces.
@@ -547,6 +560,11 @@ class LiveViewServerTest {
 
         void pack(byte[] next) {
             this.pack = next;
+        }
+
+        @Override
+        public byte[] stagePack(int n) {
+            return n == 0 ? pack : null;
         }
 
         @Override

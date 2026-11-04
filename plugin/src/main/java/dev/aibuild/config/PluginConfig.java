@@ -24,6 +24,11 @@ public final class PluginConfig {
         return reviewDeadline.getOrDefault(mode, 0);
     }
 
+    /** Whether the request is worked out into a full brief before anything is designed. */
+    public boolean enhance(String mode) {
+        return enhance.getOrDefault(mode, 0) > 0;
+    }
+
     /** Whether a lead designer writes one design concept per script candidate before they are written. */
     public boolean concepts(String mode) {
         return concepts.getOrDefault(mode, 0) > 0;
@@ -75,6 +80,9 @@ public final class PluginConfig {
     private final Map<String, Integer> reviewDeadline;
     private final Map<String, Integer> sculptors;
     private final Map<String, Integer> concepts;
+    private final Map<String, Integer> enhance;
+    /** Reasoning effort of the request enhancer. */
+    public final String enhanceEffort;
     private final Map<String, Integer> interiors;
     /** Reasoning effort of the lead designer's concept call. */
     public final String conceptEffort;
@@ -186,6 +194,8 @@ public final class PluginConfig {
         concepts = perMode(c, "script.concepts", Map.of("fast", 0, "light", 0, "standard", 1, "extra", 1), 0, 1);
         interiors = perMode(c, "script.interiors", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 1), 0, 1);
         conceptEffort = BuildMode.effort(c.getString("script.concept-effort", "high"));
+        enhance = perMode(c, "script.enhance", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 1), 0, 1);
+        enhanceEffort = BuildMode.effort(c.getString("script.enhance-effort", "high"));
         sculptRefine = !"rewrite".equalsIgnoreCase(c.getString("script.sculpt-style", "refine").trim());
         sculptTimeout = Math.clamp(c.getInt("script.sculpt-timeout", 900), 30, 3600);
         finisher = c.getBoolean("script.finisher", true);

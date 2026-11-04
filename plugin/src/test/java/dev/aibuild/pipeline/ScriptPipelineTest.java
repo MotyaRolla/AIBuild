@@ -81,4 +81,30 @@ class ScriptPipelineTest {
         assertTrue(Concepts.parse("no json at all", 2).isEmpty());
         assertTrue(Concepts.parse("{\"parts\":[]}", 2).isEmpty());
     }
+
+    @Test void theEnhancedBriefRidesUnderTheUsersOwnWords() {
+        String answer = "Here is the brief.\n```\nSUBJECT: A large German medieval castle.\nREQUIRED:\n- footprint 50x50"
+                + " (the curtain wall)\nSUGGESTED:\n- a Bergfried\nPALETTE: stone_bricks walls\nAVOID: a tiny keep\n```";
+        String brief = ScriptPrompts.parseBrief(answer);
+        assertNotNull(brief);
+        assertTrue(brief.startsWith("SUBJECT:") && !brief.contains("```") && !brief.contains("Here is"), brief);
+        assertNull(ScriptPrompts.parseBrief("I would build a castle."), "no sections, no brief");
+
+        String request = "замок 50x50, \"немецкий\"";
+        String ask = Prompts.withBrief(request, brief);
+        assertEquals(request, Prompts.userWords(ask), "the user's words come back unchanged");
+        assertEquals(request, Prompts.withBrief(request, null), "no brief, no change");
+        String line = Prompts.request("BUILD REQUEST", ask);
+        assertTrue(line.startsWith("BUILD REQUEST: \"замок 50x50, 'немецкий'\""), line);
+        assertTrue(line.indexOf("REQUEST BRIEF") > line.indexOf("BUILD REQUEST") && line.contains("request wins"), line);
+        assertTrue(line.endsWith("AVOID: a tiny keep"), line);
+
+        // every stage that quotes the request now carries the brief under it
+        String create = ScriptPrompts.create(dev.aibuild.script.Stdlib.V2, ask, "Make it rich.", null);
+        assertTrue(create.contains("BUILD REQUEST: \"замок") && create.contains("SUGGESTED:\n- a Bergfried"), create);
+        assertTrue(ScriptPrompts.critic(ask, "box(0,1,0,1,1,1,'stone');\n", "no issues", "- (main): 4 blocks", false, 1, 2,
+                java.util.List.of()).contains("REQUEST BRIEF"));
+        assertTrue(ScriptPrompts.judge(ask).contains("REQUEST BRIEF"));
+        assertFalse(ScriptPrompts.enhance(request, "Make it rich.").contains("REQUEST BRIEF"), "the enhancer sees only the user");
+    }
 }

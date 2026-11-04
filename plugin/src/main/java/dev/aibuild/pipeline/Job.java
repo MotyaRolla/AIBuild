@@ -72,6 +72,10 @@ public final class Job {
     public volatile Boolean concepts, sculptRefine, interiors;
     /** The design concept the chosen script follows, null when there was none. */
     public volatile String concept;
+    /** The request enhancer for this job instead of the configured choice (benchmarks); null = config. */
+    public volatile Boolean enhance;
+    /** The request worked out by the enhancer, null when it was off or failed; the user's words stay the authority. */
+    public volatile String brief;
 
     public Job child(String suffix) {
         return child(suffix, mode);

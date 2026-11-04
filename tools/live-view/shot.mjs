@@ -7,6 +7,9 @@
  * navigate, wait a fixed wall-clock time, capture.
  *
  *   node shot.mjs http://127.0.0.1:8787/live/<token>/ /tmp/live-shot.png [waitMs] [width] [height]
+ *
+ * PRE="js" runs in the page after the wait (a click, a key), followed by another second before the capture;
+ * EVAL="js" is evaluated last and its JSON printed, for measuring layout without guessing from pixels.
  */
 import { spawn } from "node:child_process";
 import { writeFileSync, mkdtempSync } from "node:fs";
@@ -25,7 +28,9 @@ const profile = mkdtempSync(join(tmpdir(), "live-shot-"));
 
 const chrome = spawn(CHROME, [
   "--headless=new",
-  "--disable-gpu",
+  // software WebGL, so the page draws on its GPU path as it does in a real browser
+  "--use-angle=swiftshader",
+  "--enable-unsafe-swiftshader",
   "--no-sandbox",
   "--hide-scrollbars",
   "--disable-dev-shm-usage",
@@ -103,6 +108,10 @@ const main = async () => {
 
   await cdp.send("Page.navigate", { url }, sessionId);
   await sleep(+waitMs);
+  if (process.env.PRE) {
+    await cdp.send("Runtime.evaluate", { expression: process.env.PRE, awaitPromise: true }, sessionId);
+    await sleep(1000);
+  }
 
   // Surface page errors in the terminal, so a broken script is visible and not just a blank shot.
   const errors = cdp.events
@@ -138,6 +147,10 @@ const main = async () => {
     returnByValue: true,
   }, sessionId);
   console.log(result.value);
+  if (process.env.EVAL) {
+    const r = await cdp.send("Runtime.evaluate", { expression: "JSON.stringify(" + process.env.EVAL + ")", returnByValue: true }, sessionId);
+    console.log(r.result.value ?? JSON.stringify(r.exceptionDetails?.exception?.description));
+  }
 
   const shot = await cdp.send("Page.captureScreenshot", { format: "png", captureBeyondViewport: false }, sessionId);
   writeFileSync(out, Buffer.from(shot.data, "base64"));

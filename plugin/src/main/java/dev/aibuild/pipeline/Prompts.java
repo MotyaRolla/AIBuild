@@ -696,4 +696,32 @@ public final class Prompts {
     static String escape(String s) {
         return s == null ? "" : s.replace("\"", "'").replace("\n", " ").trim();
     }
+
+    /** Where the enhanced brief starts inside a request string; the user's own words come before it. */
+    static final String BRIEF_MARK = "\n\u0001brief\u0001\n";
+
+    /** The user's request with the enhancer's brief attached, or the request alone when there is no brief. */
+    public static String withBrief(String request, String brief) {
+        return brief == null || brief.isBlank() ? request : request + BRIEF_MARK + brief.strip();
+    }
+
+    /** The user's own words of a request that may carry a brief. */
+    public static String userWords(String request) {
+        if (request == null) return "";
+        int at = request.indexOf(BRIEF_MARK);
+        return at < 0 ? request : request.substring(0, at);
+    }
+
+    /**
+     * The request line of a prompt: the user's words in quotes, then the brief when there is one. The quoted
+     * words stay first and verbatim, so a brief that drifted from them is visibly the secondary source.
+     */
+    static String request(String label, String request) {
+        String line = label + ": \"" + escape(userWords(request)) + "\"";
+        int at = request == null ? -1 : request.indexOf(BRIEF_MARK);
+        if (at < 0) return line;
+        return line + "\n\nREQUEST BRIEF (the request above, worked out by the lead designer: REQUIRED restates what it asks,"
+                + "\nSUGGESTED fills in what it leaves open and may be varied; where the brief and the request differ, the"
+                + "\nrequest wins):\n" + request.substring(at + BRIEF_MARK.length());
+    }
 }

@@ -38,7 +38,8 @@ import java.nio.charset.StandardCharsets;
  * cells     n × 16 bytes, LE:
  *           offset 0  int16 x, int16 y, int16 z  coordinates in model space (block corner, y floor of cell)
  *           offset 6  uint8 shape               {@link Shapes}
- *           offset 7  uint8 facing              0..7, {@link Facing}, only meaningful for non-cube shapes
+ *           offset 7  uint8 facing              0..7, {@link Facing}, only meaningful for non-cube shapes;
+ *                                               stairs add {@link Facing#UPSIDE_DOWN}
  *           offset 8  uint16 block              index into payload.blocks
  *           offset 10 uint32 flags              {@link Flags}
  *           offset 14 int16 part                index into payload.parts, -1 when unknown
@@ -111,6 +112,8 @@ public final class ModelPack {
         public static final int UP = 4;
         public static final int DOWN = 5;
         public static final int NONE = 7;
+        /** Added to a stairs facing when the stairs are upside down ({@code half=top}). */
+        public static final int UPSIDE_DOWN = 8;
 
         private Facing() {
         }

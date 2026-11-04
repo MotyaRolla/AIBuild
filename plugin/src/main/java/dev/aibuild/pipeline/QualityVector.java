@@ -47,6 +47,21 @@ public record QualityVector(int critical, int floating, int unsupported, int dar
                 || blockedDoors < before.blockedDoors || damage < before.damage || furnishedRooms > before.furnishedRooms;
     }
 
+    /** The components a person reads, by name, in display order (the live page's stage table). */
+    public java.util.Map<String, Integer> metrics() {
+        java.util.Map<String, Integer> m = new java.util.LinkedHashMap<>();
+        m.put("critical", critical);
+        m.put("floating", floating);
+        m.put("unsupported", unsupported);
+        m.put("dark", dark);
+        m.put("blocked doors", blockedDoors);
+        m.put("rooms", rooms);
+        m.put("furnished", furnishedRooms);
+        m.put("destroyed", damage);
+        m.put("blocks", blocks);
+        return m;
+    }
+
     public String describe() {
         return "critical " + critical + ", floating " + floating + ", unsupported " + unsupported + ", dark " + dark
                 + ", blocked doors " + blockedDoors + ", rooms " + rooms + " (furnished " + furnishedRooms + ")"

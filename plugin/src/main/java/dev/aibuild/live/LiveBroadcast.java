@@ -18,8 +18,8 @@ public interface LiveBroadcast {
     /** The model's answer text so far while a call streams ({@code kind} = {@code "program"}, {@code "critic"}…). */
     void code(String kind, CharSequence textSoFar);
 
-    /** The streamed reasoning text so far. */
-    void reasoning(CharSequence textSoFar);
+    /** The streamed reasoning text so far of the call whose answer streams as {@code kind}. */
+    void reasoning(String kind, CharSequence textSoFar);
 
     /** A streamed prefix of the program was run and shown. */
     void preview(boolean ok, int blocks, int length);
@@ -46,6 +46,14 @@ public interface LiveBroadcast {
      */
     void trace(TraceStep.Builder step);
 
+    /**
+     * A review stage ended: {@code kept} says whether its result became the build, {@code why} what decided it,
+     * {@code quality} the measured defects of the build after it (in display order), {@code model} the build after
+     * a kept stage (null for a rejected one), so a viewer can step back through the stages.
+     */
+    void verdict(String stage, String title, boolean kept, String why, java.util.Map<String, Integer> quality,
+                 dev.aibuild.model.VoxelModel model);
+
     /** A receiver that does nothing. */
     LiveBroadcast NOOP = new LiveBroadcast() {
         @Override
@@ -57,7 +65,7 @@ public interface LiveBroadcast {
         }
 
         @Override
-        public void reasoning(CharSequence textSoFar) {
+        public void reasoning(String kind, CharSequence textSoFar) {
         }
 
         @Override
@@ -86,6 +94,11 @@ public interface LiveBroadcast {
 
         @Override
         public void trace(TraceStep.Builder step) {
+        }
+
+        @Override
+        public void verdict(String stage, String title, boolean kept, String why, java.util.Map<String, Integer> quality,
+                            dev.aibuild.model.VoxelModel model) {
         }
     };
 

@@ -17,9 +17,14 @@ import com.google.gson.JsonObject;
 public record LiveEvent(String type, long seq, long atMillis, JsonObject data) {
 
     public static final String STAGE = "stage";
-    /** Whole answer text so far: {@code {kind, text}} — the partially written build program. */
+    /**
+     * The answer text of one stream ({@code program}, {@code critic1}, {@code sculpt:roof}…). Either the whole
+     * text, {@code {kind, text}}, or what was appended since the previous frame of that stream,
+     * {@code {kind, at, append}}, where {@code at} is the length the page must already hold; a page whose copy has
+     * another length re-reads {@code state.json}.
+     */
     public static final String CODE = "code";
-    /** Streamed reasoning text: {@code {text}}. */
+    /** Streamed reasoning text: {@code {kind, text}} or {@code {kind, at, append}}, as for {@link #CODE}. */
     public static final String THINK = "think";
     /** A run of the program so far: {@code {ok, blocks, length}}; {@code ok} is false when it stopped. */
     public static final String PREVIEW = "preview";
@@ -38,6 +43,11 @@ public record LiveEvent(String type, long seq, long atMillis, JsonObject data) {
      * The step's inputs and outputs are fetched from {@code /live/<token>/step/<seq>} only when expanded.
      */
     public static final String STEP = "step";
+    /**
+     * A review stage ended: {@code {n, stage, title, kept, why, quality:{name:value}, url}}; {@code url} is the
+     * build after that stage when it was kept.
+     */
+    public static final String VERDICT = "verdict";
 
     public LiveEvent {
         type = type == null ? "note" : type;

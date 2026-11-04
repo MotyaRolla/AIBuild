@@ -14,6 +14,7 @@ import java.util.ArrayList;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -78,10 +79,12 @@ public final class LiveSession implements LiveFeed, LiveBroadcast, LiveViewServe
     private final Deque<String> says = new ArrayDeque<>();
     private final JsonArray parts = new JsonArray();
 
-    private final ConcurrentHashMap<String, String> liveText = new ConcurrentHashMap<>();
+    /** The streamed answer and reasoning of every AI call so far, by kind ({@code program}, {@code critic1}…). */
+    private final ConcurrentHashMap<String, Stream> streams = new ConcurrentHashMap<>();
     private final AtomicBoolean textScheduled = new AtomicBoolean();
-    private final AtomicReference<String> latestThink = new AtomicReference<>("");
-    private final AtomicBoolean thinkScheduled = new AtomicBoolean();
+    /** Review stages in the order they ended, and the build after each kept one. */
+    private final List<JsonObject> verdicts = new ArrayList<>();
+    private final Map<Integer, byte[]> stagePacks = new ConcurrentHashMap<>();
     private final AtomicReference<VoxelModel> pendingModel = new AtomicReference<>();
     private final AtomicBoolean modelScheduled = new AtomicBoolean();
     private volatile String pendingWhy = "stage";
@@ -97,6 +100,22 @@ public final class LiveSession implements LiveFeed, LiveBroadcast, LiveViewServe
     private volatile boolean finished;
     private volatile long finishedAt;
     private volatile String part = "";
+
+    /** Review stages whose build is kept for the page; older ones are dropped first. */
+    static final int STAGE_PACK_LIMIT = 12;
+
+    /**
+     * One AI call as the page shows it. The text grows by appending while the answer streams, so a frame carries
+     * only what was added since the previous frame of the same stream; {@code sent*} is what went out last.
+     */
+    private static final class Stream {
+        final long first = System.currentTimeMillis();
+        volatile long updated = first;
+        volatile String text = "";
+        volatile String think = "";
+        String sentText = "";
+        String sentThink = "";
+    }
 
     /** One timeline row: a stage that started at {@code at} (epoch millis) and ran for {@code ms}. */
     record StageEntry(String stage, String title, long at, long ms) {
@@ -187,6 +206,7 @@ public final class LiveSession implements LiveFeed, LiveBroadcast, LiveViewServe
         o.addProperty("mode", modeId);
         o.addProperty("kind", kind);
         o.addProperty("owner", ownerName);
+        o.addProperty("request", job.request == null ? "" : job.request);
         o.addProperty("startedAt", startedAt);
         o.addProperty("elapsedMs", System.currentTimeMillis() - startedAt);
         o.addProperty("finished", finished);
@@ -205,14 +225,18 @@ public final class LiveSession implements LiveFeed, LiveBroadcast, LiveViewServe
         o.add("counters", counters);
         JsonArray code = new JsonArray();
         JsonArray partsSnapshot = parts.deepCopy();
-        liveText.forEach((k, v) -> {
+        streams.entrySet().stream().sorted(java.util.Comparator.comparingLong(e -> e.getValue().first)).forEach(e -> {
             JsonObject c = new JsonObject();
-            c.addProperty("kind", k);
-            c.addProperty("text", v);
+            c.addProperty("kind", e.getKey());
+            c.addProperty("text", e.getValue().text);
+            c.addProperty("think", e.getValue().think);
+            c.addProperty("updated", e.getValue().updated);
             code.add(c);
         });
         o.add("code", code);
-        o.addProperty("think", latestThink.get());
+        JsonArray verdictArr = new JsonArray();
+        for (JsonObject v : verdicts) verdictArr.add(v.deepCopy());
+        o.add("verdicts", verdictArr);
         JsonArray noteArr = new JsonArray();
         synchronized (lock) {
             for (String[] n : notes) {
@@ -319,14 +343,61 @@ public final class LiveSession implements LiveFeed, LiveBroadcast, LiveViewServe
     @Override
     public void code(String kind, CharSequence textSoFar) {
         if (kind == null) return;
-        liveText.put(kind, textSoFar == null ? "" : textSoFar.toString());
+        Stream st = streams.computeIfAbsent(kind, k -> new Stream());
+        st.text = textSoFar == null ? "" : textSoFar.toString();
+        st.updated = System.currentTimeMillis();
         scheduleText();
     }
 
     @Override
-    public void reasoning(CharSequence textSoFar) {
-        latestThink.set(textSoFar == null ? "" : textSoFar.toString());
-        if (thinkScheduled.compareAndSet(false, true)) queue.offer(this::emitThink);
+    public void reasoning(String kind, CharSequence textSoFar) {
+        if (kind == null) return;
+        Stream st = streams.computeIfAbsent(kind, k -> new Stream());
+        st.think = textSoFar == null ? "" : textSoFar.toString();
+        st.updated = System.currentTimeMillis();
+        scheduleText();
+    }
+
+    @Override
+    public void verdict(String stage, String title, boolean kept, String why, Map<String, Integer> quality, VoxelModel model) {
+        if (stage == null) return;
+        VoxelModel copy = kept && model != null ? model.copy() : null;
+        // encoded on the worker: a 60k-block build takes a noticeable moment, and the pipeline must not wait for it
+        queue.offer(() -> {
+            JsonObject v = new JsonObject();
+            v.addProperty("stage", stage);
+            v.addProperty("title", safe(title));
+            v.addProperty("kept", kept);
+            v.addProperty("why", clip(stripTags(why), 600));
+            JsonObject q = new JsonObject();
+            if (quality != null) quality.forEach(q::addProperty);
+            v.add("quality", q);
+            v.addProperty("at", System.currentTimeMillis());
+            int n;
+            synchronized (lock) {
+                n = verdicts.size();
+                v.addProperty("n", n);
+            }
+            if (copy != null) {
+                try {
+                    stagePacks.put(n, ModelPackWriter.encode(copy, info, stage, seed, snapshotParts(), Set.of(),
+                            "/live/" + token + "/atlas.png"));
+                    stagePacks.remove(n - STAGE_PACK_LIMIT);
+                    v.addProperty("url", "/live/" + token + "/stage/" + n + ".bin");
+                } catch (RuntimeException ignored) {
+                    // the row still shows; only stepping back to this stage is unavailable
+                }
+            }
+            synchronized (lock) {
+                verdicts.add(v);
+                if (!finished) publish(LiveEvent.of(LiveEvent.VERDICT, 0, v.deepCopy()));
+            }
+        });
+    }
+
+    @Override
+    public byte[] stagePack(int n) {
+        return stagePacks.get(n);
     }
 
     @Override
@@ -515,23 +586,37 @@ public final class LiveSession implements LiveFeed, LiveBroadcast, LiveViewServe
         if (textScheduled.compareAndSet(false, true)) queue.offer(this::emitText);
     }
 
+    /**
+     * Publishes what every stream added since its last frame. Answers grow by appending, so sending the whole
+     * text per token (three candidates of 20 KB each, dozens of times a second) would be almost all repetition;
+     * when a stream starts over (a transport retry) its whole text goes out instead.
+     */
     private void emitText() {
         textScheduled.set(false);
-        liveText.forEach((kind, text) -> {
-            JsonObject data = new JsonObject();
-            data.addProperty("kind", kind);
-            data.addProperty("text", text);
-            publish(LiveEvent.of(LiveEvent.CODE, 0, data));
+        streams.forEach((kind, st) -> {
+            String text = st.text, think = st.think;
+            if (!think.equals(st.sentThink)) {
+                publish(LiveEvent.of(LiveEvent.THINK, 0, delta(kind, st.sentThink, think)));
+                st.sentThink = think;
+            }
+            if (!text.equals(st.sentText)) {
+                publish(LiveEvent.of(LiveEvent.CODE, 0, delta(kind, st.sentText, text)));
+                st.sentText = text;
+            }
         });
     }
 
-    private void emitThink() {
-        thinkScheduled.set(false);
-        String t = latestThink.get();
-        if (t.isEmpty()) return;
+    /** {@code {kind, at, append}} when {@code now} extends {@code sent}, else {@code {kind, text}}. */
+    private static JsonObject delta(String kind, String sent, String now) {
         JsonObject data = new JsonObject();
-        data.addProperty("text", t);
-        publish(LiveEvent.of(LiveEvent.THINK, 0, data));
+        data.addProperty("kind", kind);
+        if (!sent.isEmpty() && now.startsWith(sent)) {
+            data.addProperty("at", sent.length());
+            data.addProperty("append", now.substring(sent.length()));
+        } else {
+            data.addProperty("text", now);
+        }
+        return data;
     }
 
     private void scheduleModel() {
@@ -655,6 +740,8 @@ public final class LiveSession implements LiveFeed, LiveBroadcast, LiveViewServe
         subscribers.clear();
         worker.interrupt();
         latestPack = null;
+        stagePacks.clear();
+        streams.clear();
         lastEncoded.set(null);
         pendingModel.set(null);
         synchronized (lock) {

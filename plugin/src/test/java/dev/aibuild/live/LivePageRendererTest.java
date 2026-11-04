@@ -17,9 +17,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * Guards on the live page's renderer and controls.
  *
  * <p>The page is plain JavaScript served from a resource, so these read the shipped file rather than a copy.
- * They cover the defects that were found by looking at a real build: the horizontal drag was inverted, one of
- * the two vertical block faces was picked from the wrong sign, and {@code fit()} sized the picture from the
- * model's spans with hand-tuned factors instead of its projected outline. Each of those is a one-line change
+ * They cover the defects that were found by looking at a real build: the horizontal drag was inverted, the
+ * cells were painted nearest first and with their two hidden sides (a stone tower vanished behind the grass
+ * around it), and {@code fit()} sized the picture from the model's spans with hand-tuned factors instead of its
+ * projected outline. Each of those is a one-line change
  * that looks harmless in review and is only obvious on screen, which is exactly what a test is for.</p>
  */
 class LivePageRendererTest {
@@ -58,15 +59,16 @@ class LivePageRendererTest {
 
     @Test
     void bothVerticalFacesPickTheNearerOneForTheCamera() throws IOException {
-        String box = function(page(), "box");
-        // The vertical-face choice along z reads off cos(yaw); along x it reads off the negated sin. Getting
-        // that second sign wrong draws the face on the far side of the block, which is what made blocks look
-        // wrong rather than merely a different colour.
-        assertTrue(box.contains("const nx = -Math.sin(cam.yaw)"),
-                "the x face sign must be negated: the near face along x is the one at low x when sin(yaw) > 0");
-        assertTrue(box.contains("nz = Math.cos(cam.yaw)"), "the z face sign is cosine");
-        assertFalse(box.contains("const nx = Math.sin(cam.yaw)"),
-                "an un-negated sin is the bug: it draws the far x face");
+        String page = page();
+        // nearness() grows towards the camera: by sin(yaw) per step along +x and cos(yaw) along +z. The faces
+        // shown are the ones on that side; the negated sin this test used to demand drew both far faces.
+        String near = function(page, "nearness");
+        assertTrue(near.contains("px * Math.sin(cam.yaw) + pz * Math.cos(cam.yaw)") && near.contains("py * Math.sin(cam.pitch)"),
+                "nearness is the rotated depth plus height, both towards a camera above the build");
+        String box = function(page, "box");
+        assertTrue(box.contains("const nx = Math.sin(cam.yaw), nz = Math.cos(cam.yaw)"),
+                "the visible x face follows sin(yaw), the z face cos(yaw), as in nearness()");
+        assertFalse(box.contains("-Math.sin(cam.yaw)"), "a negated sin draws the far x face");
     }
 
     @Test
@@ -81,13 +83,21 @@ class LivePageRendererTest {
     }
 
     @Test
-    void theDrawLoopDoesNotCallTrigInsideTheComparator() throws IOException {
-        String draw = function(page(), "draw");
-        assertFalse(draw.contains("order.sort((a, b) => depth("),
-                "depth() in the comparator runs four Math.cos per comparison: precompute the keys instead");
-        assertTrue(draw.contains("keyOf"), "the sort must use precomputed depth keys");
-        assertTrue(draw.matches("(?s).*Math\\.cos\\(cam\\.yaw\\).*"),
-                "the trig is hoisted out of the loop, once per frame");
+    void cellsArePaintedFarthestFirstFromPrecomputedKeys() throws IOException {
+        String order = function(page(), "paintOrder");
+        assertTrue(order.contains("new Float64Array"), "the sort must use precomputed depth keys");
+        assertTrue(order.contains(".sort((a, b) => key[a] - key[b])"),
+                "ascending nearness is far to near; the descending sort painted the ground over the tower");
+        assertTrue(order.contains("m.orderYaw === cam.yaw && m.orderPitch === cam.pitch"),
+                "the order is cached per camera angle, so pan and zoom do not re-sort");
+    }
+
+    @Test
+    void cullingKeepsEveryCellWhoseFrontNeighboursAreNotSolid() throws IOException {
+        String vis = function(page(), "visibleCells");
+        assertTrue(vis.contains("KEY(x, y + 1, z)") && vis.contains("KEY(x + sx, y, z)") && vis.contains("KEY(x, y, z + sz)"),
+                "a cell may only be skipped when the neighbours on its three visible sides hide it");
+        assertTrue(vis.contains("!solid.has(KEY(x, y, z))"), "see-through and partial cells are always drawn");
     }
 
     @Test
@@ -102,7 +112,7 @@ class LivePageRendererTest {
 
     @Test
     void spritesAreDiscardedWhenTheCameraMoves() throws IOException {
-        String draw = function(page(), "draw");
+        String draw = function(page(), "renderScene");
         assertTrue(draw.contains("resetSprites()"),
                 "sprites encode the camera; a moved camera must invalidate them or the picture skews");
         assertTrue(draw.contains("cam.pitch"), "pitch matters as much as yaw and scale");
@@ -163,10 +173,48 @@ class LivePageRendererTest {
 
     @Test
     void everyShapeStillDrawsSomething() throws IOException {
-        String draw = function(page(), "draw");
+        String draw = function(page(), "renderScene");
         for (String shape : List.of("PLATE", "CROSS", "POST", "PANE", "SLAB_BOTTOM", "SLAB_TOP", "STAIRS")) {
             assertTrue(draw.contains("SHAPE." + shape), "shape " + shape + " must still be handled");
         }
         assertTrue(draw.contains("box(g,"), "the common case must still draw a box");
+    }
+
+    @Test
+    void theGpuPathProjectsExactlyLikeTheCanvasOne() throws IOException {
+        String page = page();
+        String project = function(page, "project");
+        assertTrue(project.contains("px * cosY - pz * sinY") && project.contains("-py * cosP + rz * sinP"),
+                "the reference projection");
+        String gl = function(page, "createGLRenderer");
+        // fit(), zoom about the cursor and the grid all go through project(); the shader must be the same map
+        assertTrue(gl.contains("float rx = aPos.x * uRot.x - aPos.z * uRot.y;")
+                        && gl.contains("float sy = -aPos.y * uRot.z + rz * uRot.w;"),
+                "the vertex shader must project like project()");
+        // nearer is larger nearness, and the depth test keeps the smaller depth
+        assertTrue(gl.contains("float near = rz * uRot.z + aPos.y * uRot.w;") && gl.contains("-near * uView.w"),
+                "depth must be the negated nearness() so near faces win");
+        assertTrue(function(page, "draw").contains("if (glr) { glr.draw(); return; }"),
+                "with WebGL a frame is drawn on the GPU, not by the 2D painter");
+    }
+
+    @Test
+    void theMeshDropsOnlyFacesCoveredByAFullCubeOrTheSameGlass() throws IOException {
+        String mesh = function(page(), "buildMesh");
+        assertTrue(mesh.contains("solid.has(k) || (mine !== undefined && see.get(k) === mine)"),
+                "a face is hidden only by a full opaque cube or by the same see-through block");
+        for (String shape : List.of("PLATE", "CROSS", "POST", "PANE", "SLAB_BOTTOM", "SLAB_TOP", "STAIRS")) {
+            assertTrue(mesh.contains("SHAPE." + shape), "shape " + shape + " must be meshed");
+        }
+    }
+
+    @Test
+    void theCodePaneOnlyRehighlightsItsTail() throws IOException {
+        String page = page();
+        assertTrue(function(page, "highlight").contains("highlight.safe = safe"),
+                "the highlighter reports where the text can be cut");
+        String paint = function(page, "paintCode");
+        assertTrue(paint.contains("v.frozen.insertAdjacentHTML") && paint.contains("v.tail.innerHTML = highlight(tail)"),
+                "finished lines are frozen and only the tail is painted again");
     }
 }

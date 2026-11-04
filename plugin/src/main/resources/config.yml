@@ -87,6 +87,15 @@ script:
     extra: 5
   sculpt-effort: high        # reasoning of the art director, the sculptors and the interior designer
   sculpt-style: refine       # refine = keep the part's structure and kits, add craft; rewrite = redesign the part
+  # first of all, the request is worked out into a full brief: typos fixed, translated, sizes read the way the
+  # user meant them, and the style spelled out as buildable features and real blocks. Every later stage sees the
+  # user's words first and this brief under them (1 = on, 0 = off)
+  enhance:
+    fast: 0
+    light: 1
+    standard: 1
+    extra: 1
+  enhance-effort: high       # reasoning of the request enhancer
   # before the candidates are written, a lead designer writes one short design concept per candidate (layout,
   # size, signature details, palette), so the candidates try different ideas; what the request states is kept
   # (1 = on, 0 = off)

@@ -66,6 +66,7 @@ import java.util.logging.Logger;
  * GET  /live/&lt;token&gt;/            page (index.html from the jar, or a placeholder if it is missing)
  * GET  /live/&lt;token&gt;/state.json  {@link LiveFeed#bootstrapJson()}
  * GET  /live/&lt;token&gt;/model.bin   {@link PackSource#latestPack()}, 404 unless the feed is a PackSource
+ * GET  /live/&lt;token&gt;/stage/N.bin {@link PackSource#stagePack(int)}: the build after kept review stage N
  * GET  /live/&lt;token&gt;/events      Server-Sent Events, 15 s heartbeat, 8 concurrent viewers by default
  * POST /live/&lt;token&gt;/stop        calls {@link StopHandler}, 405 when no handler is registered
  * GET  /healthz                 "ok"
@@ -100,6 +101,11 @@ public final class LiveViewServer implements AutoCloseable {
     public interface PackSource {
         /** The most recently encoded {@link ModelPack}, or {@code null} when none has been produced yet. */
         byte[] latestPack();
+
+        /** The build after kept review stage {@code n} (see the {@code verdict} event), or {@code null}. */
+        default byte[] stagePack(int n) {
+            return null;
+        }
     }
 
     /**
@@ -280,7 +286,8 @@ public final class LiveViewServer implements AutoCloseable {
                     if (require(exchange, "GET")) send(exchange, 200, HTML, page, "Referrer-Policy", "no-referrer");
                 }
                 case "state.json" -> serveState(exchange, route.token, feed);
-                case "model.bin" -> serveModel(exchange, route.token, feed);
+                case "model.bin" -> serveModel(exchange, route.token, feed, -1);
+                case "stage" -> serveModel(exchange, route.token, feed, Integer.parseInt(route.arg));
                 case "atlas.png" -> serveAtlas(exchange, route.token, feed);
                 case "events" -> serveEvents(exchange, route.token, feed);
                 case "stop" -> serveStop(exchange, route.token);
@@ -378,7 +385,8 @@ public final class LiveViewServer implements AutoCloseable {
         }
     }
 
-    private void serveModel(HttpExchange exchange, String token, LiveFeed feed) throws IOException {
+    /** The newest model, or with {@code stage >= 0} the build as that kept review stage left it (404 if unknown). */
+    private void serveModel(HttpExchange exchange, String token, LiveFeed feed, int stage) throws IOException {
         if (!require(exchange, "GET")) return;
         if (!(feed instanceof PackSource source)) {
             send(exchange, 404, TEXT, NOT_FOUND);
@@ -388,10 +396,14 @@ public final class LiveViewServer implements AutoCloseable {
         try {
             byte[] pack;
             try {
-                pack = source.latestPack();
+                pack = stage < 0 ? source.latestPack() : source.stagePack(stage);
             } catch (RuntimeException e) {
                 log.log(Level.FINE, "live " + prefix(token) + " latestPack failed", e);
                 send(exchange, 500, TEXT, utf8("model unavailable\n"));
+                return;
+            }
+            if (pack == null && stage >= 0) {
+                send(exchange, 404, TEXT, NOT_FOUND);
                 return;
             }
             if (pack == null) {
@@ -636,6 +648,8 @@ public final class LiveViewServer implements AutoCloseable {
                 case "", "state.json", "model.bin", "atlas.png", "events", "stop", "trace.md" -> new Route(token, head, arg);
                 // /step/<n> addresses one recorded step
                 case "step" -> arg.matches("\\d{1,9}") ? new Route(token, "step", arg) : null;
+                // /stage/<n>.bin is the build after one kept review stage
+                case "stage" -> arg.matches("\\d{1,4}\\.bin") ? new Route(token, "stage", arg.substring(0, arg.length() - 4)) : null;
                 default -> null;
             };
         }
