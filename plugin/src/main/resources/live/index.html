@@ -1786,6 +1786,7 @@ function streamLabel(k) {
   if ((m = k.match(/^program-c(\d+)-repair(\d+)$/))) return "Candidate " + m[1] + " · fix " + m[2];
   if ((m = k.match(/^program-repair(\d+)$/))) return "Program · fix " + m[1];
   if ((m = k.match(/^critic(\d+)$/))) return "Critic " + m[1];
+  if ((m = k.match(/^draft(\d+)$/))) return "Draft " + m[1];
   if (k.startsWith("sculpt:")) return "Sculptor · " + k.slice(7);
   return { enhance: "Request brief", interior: "Interior designer", concepts: "Concepts", director: "Art director", "judge-ab": "Judge A|B",
     "judge-ba": "Judge B|A", "edit-script": "Edit" }[k] || k;

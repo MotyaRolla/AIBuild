@@ -38,10 +38,22 @@ public final class Rasterizer {
      * @param carve     write air instead of blocks (cut the shape out)
      * @param onlyAir   only fill cells that are currently empty
      * @param onlySolid only replace cells that currently hold a block (repaint)
+     * @param from      with onlySolid: the side the surface is seen from (0..5 = {@link #FROM}), or -1. Only the first
+     *                  block along each straight line from that side is repainted, so a pattern lies as one layer on
+     *                  the surface a viewer sees (eyes on a round head, a sign on a curved wall), never wrapped
+     *                  around the curve into the blocks behind it
      */
-    public record Options(boolean smooth, double shell, boolean carve, boolean onlyAir, boolean onlySolid) {
-        public static final Options SOLID = new Options(false, 0, false, false, false);
+    public record Options(boolean smooth, double shell, boolean carve, boolean onlyAir, boolean onlySolid, int from) {
+        public static final Options SOLID = new Options(false, 0, false, false, false, -1);
+
+        public Options(boolean smooth, double shell, boolean carve, boolean onlyAir, boolean onlySolid) {
+            this(smooth, shell, carve, onlyAir, onlySolid, -1);
+        }
     }
+
+    /** The sides a repaint can be seen from, as {@link Options#from} indices, with the step towards the viewer. */
+    public static final java.util.List<String> FROM = java.util.List.of("north", "south", "west", "east", "up", "down");
+    private static final int[][] FROM_STEP = {{0, 0, -1}, {0, 0, 1}, {-1, 0, 0}, {1, 0, 0}, {0, 1, 0}, {0, -1, 0}};
 
     /** @return number of cells written */
     public static int place(Canvas canvas, Shape local, Material material, Options o, long[] sampleBudget) {
@@ -178,6 +190,45 @@ public final class Rasterizer {
         }
 
         int write(Canvas canvas, Material material, Options o) {
+            canvas.repainting(o.onlySolid);
+            try {
+                return writeCells(canvas, material, o, o.onlySolid && o.from >= 0 ? facing(canvas, o.from) : null);
+            } finally {
+                canvas.repainting(false);
+            }
+        }
+
+        /**
+         * The cells seen first from a side: along each line from that side through the grid, the first cell holding a
+         * block, when it is inside the shape. A block of the build in front (inside the grid) hides what is behind it.
+         */
+        private boolean[] facing(Canvas canvas, int from) {
+            int[] st = FROM_STEP[from];
+            boolean[] out = new boolean[w * h * dep];
+            int[] size = {w, h, dep};
+            int axis = st[0] != 0 ? 0 : st[1] != 0 ? 1 : 2;
+            int ua = axis == 0 ? 1 : 0, va = axis == 2 ? 1 : 2;
+            int n = size[axis];
+            for (int u = 0; u < size[ua]; u++) {
+                for (int v = 0; v < size[va]; v++) {
+                    for (int t = 0; t < n; t++) {
+                        int along = st[axis] > 0 ? n - 1 - t : t;   // start at the viewer's side
+                        int[] c = new int[3];
+                        c[axis] = along;
+                        c[ua] = u;
+                        c[va] = v;
+                        BlockSpec cur = canvas.getWorld(x0 + c[0], y0 + c[1], z0 + c[2]);
+                        if (cur == null || cur.isAir()) continue;
+                        int i = idx(c[0], c[1], c[2]);
+                        if (kind[i] != EMPTY) out[i] = true;
+                        break;
+                    }
+                }
+            }
+            return out;
+        }
+
+        private int writeCells(Canvas canvas, Material material, Options o, boolean[] seen) {
             int written = 0;
             int[] cellBounds = {x0, y0, z0, x0 + w - 1, y0 + h - 1, z0 + dep - 1};
             for (int y = 0; y < h; y++) {
@@ -185,7 +236,7 @@ public final class Rasterizer {
                     for (int x = 0; x < w; x++) {
                         int i = idx(x, y, z);
                         byte k = kind[i];
-                        if (k == EMPTY) continue;
+                        if (k == EMPTY || seen != null && !seen[i]) continue;
                         int wx = x0 + x, wy = y0 + y, wz = z0 + z;
                         if (o.onlyAir || o.onlySolid) {
                             BlockSpec cur = canvas.getWorld(wx, wy, wz);

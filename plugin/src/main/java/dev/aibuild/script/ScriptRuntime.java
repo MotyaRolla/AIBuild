@@ -120,7 +120,9 @@ public final class ScriptRuntime {
     public ScriptResult run(String source, long seed, VoxelModel base, int[] limits, Budget budget, AtomicBoolean cancel) {
         long start = System.currentTimeMillis();
         String prepared = ScriptLint.prepare(source);
-        ScriptError pre = ScriptLint.precheck(prepared);
+        // Errors quote the model's own text: prepare() keeps every position, so SEARCH lines copied from a traceback match.
+        String own = source == null ? "" : source;
+        ScriptError pre = ScriptLint.precheck(own);
         Run run = new Run(seed, base == null ? new VoxelModel() : base.copy(), limits, budget,
                 cancel == null ? new AtomicBoolean() : cancel, start);
         ScriptError error = null;
@@ -142,13 +144,13 @@ public final class ScriptRuntime {
                 error = new ScriptError("runtime", "the script ran but placed no blocks", 0, 0, "", "");
             }
         } catch (ScriptBudgetException e) {
-            error = budgetError(e, prepared);
+            error = budgetError(e, own);
         } catch (WrappedException e) {
             Throwable inner = e.getWrappedException();
-            error = inner instanceof ScriptBudgetException b ? budgetError(b, prepared) : fromRhino(e, prepared, "runtime");
+            error = inner instanceof ScriptBudgetException b ? budgetError(b, own) : fromRhino(e, own, "runtime");
         } catch (RhinoException e) {
             String kind = e instanceof org.mozilla.javascript.EvaluatorException && e.getScriptStack().length == 0 ? "syntax" : "runtime";
-            error = fromRhino(e, prepared, kind);
+            error = fromRhino(e, own, kind);
         } catch (StackOverflowError e) {
             error = new ScriptError("budget", "recursion too deep", 0, 0, "", "");
         } catch (RuntimeException e) {
@@ -160,13 +162,20 @@ public final class ScriptRuntime {
             // Not the script's fault: repairing it cannot help, so the caller falls back instead of retrying.
             throw new IllegalStateException("the build-script library failed to load: " + error.message());
         }
-        error = ScriptLint.explain(error, prepared, stdlib.api());
+        error = ScriptLint.explain(error, own, stdlib.api());
         Canvas c = run.canvas;
         if (error == null) c.settle();
         return new ScriptResult(c.model(), error, run.meta, c.parts(), c.owners(), c.smoothed(), List.copyOf(run.logs),
-                merge(c.warnings(), c.outside()), c.outside(), run.instructions, System.currentTimeMillis() - start,
+                merge(error == null ? concat(c.warnings(), concat(c.coveredNotes(), c.hiddenMarks())) : c.warnings(), c.outside()), c.outside(), run.instructions, System.currentTimeMillis() - start,
                 List.copyOf(run.doorways), c.collisions(), Map.copyOf(c.overlaps()), c.confinements(),
                 c.anchors(), c.notes(), List.copyOf(run.options.values()));
+    }
+
+    private static List<String> concat(List<String> a, List<String> b) {
+        if (b.isEmpty()) return a;
+        List<String> out = new ArrayList<>(a);
+        out.addAll(b);
+        return out;
     }
 
     private static List<String> merge(List<String> warnings, long outside) {
@@ -682,7 +691,7 @@ public final class ScriptRuntime {
             boolean carve = bool(o, "carve");
             Material m = carve ? new Material.Fixed(BlockSpec.AIR) : run.material(a[1]);
             Rasterizer.Options opts = new Rasterizer.Options(bool(o, "smooth"), number(o, "shell", 0), carve,
-                    bool(o, "onlyAir"), bool(o, "onlySolid"));
+                    bool(o, "onlyAir"), bool(o, "onlySolid"), from(run, o));
             return Rasterizer.place(run.canvas, sh, m, opts, run.samples);
         });
         fn(scope, "__mat", 1, (c, s, a) -> run.addMaterial(material(run, (Scriptable) a[0])));
@@ -798,7 +807,13 @@ public final class ScriptRuntime {
     private Shape shape(Run run, Scriptable o, Context cx, Scriptable scope) {
         String t = str(o, "t");
         return switch (t) {
-            case "sphere" -> Shape.sphere(vec(get(o, "c")), num(get(o, "r")));
+            case "sphere" -> {
+                Object r = get(o, "r");
+                if (!(r instanceof NativeArray)) yield Shape.sphere(vec(get(o, "c")), num(r));
+                // per-axis radii [rx, ry, rz]: the shape asked for is plain, so it is built instead of stopping the script
+                run.canvas.warn("auto-corrected: sphere() got per-axis radii, ellipsoid() was used");
+                yield Shape.ellipsoid(vec(get(o, "c")), vec(r));
+            }
             case "ellipsoid" -> Shape.ellipsoid(vec(get(o, "c")), vec(get(o, "r")));
             case "box" -> Shape.box(vec(get(o, "a")), vec(get(o, "b")));
             case "rbox" -> Shape.rbox(vec(get(o, "a")), vec(get(o, "b")), num(get(o, "round")));
@@ -813,7 +828,20 @@ public final class ScriptRuntime {
             case "union" -> Shape.union(shapes(run, get(o, "of")));
             case "inter" -> Shape.intersect(shapes(run, get(o, "of")));
             case "sub" -> Shape.subtract(run.shape(get(o, "a")), shapes(run, get(o, "of")));
-            case "blend" -> Shape.blend(num(get(o, "k")), shapes(run, get(o, "of")));
+            case "blend" -> {
+                double k = num(get(o, "k"));
+                List<Shape> of = shapes(run, get(o, "of"));
+                // a radius out of range is a slip, not a different design: the nearest blend that exists is used
+                if (k > 16) {
+                    run.canvas.warn("auto-corrected: blend() radius above 16 was clamped to 16");
+                    yield Shape.blend(16, of);
+                }
+                if (!(k > 0)) {
+                    run.canvas.warn("auto-corrected: blend() radius must be > 0 (got " + k + "); a plain union() was used");
+                    yield of.isEmpty() ? Shape.blend(1, of) : Shape.union(of);
+                }
+                yield Shape.blend(k, of);
+            }
             case "offset" -> Shape.offset(run.shape(get(o, "of")), num(get(o, "by")));
             case "xf" -> Shape.transform(run.shape(get(o, "of")), frame(get(o, "ops")));
             case "arch" -> Shape.arch(axisChar(get(o, "along"), 'x'), num(get(o, "c")), num(get(o, "w0")), num(get(o, "w1")),
@@ -911,9 +939,15 @@ public final class ScriptRuntime {
                 List<Material> ramp = new ArrayList<>();
                 for (Object m : list(get(o, "of"))) ramp.add(run.material(m));
                 if (ramp.size() < 2) throw new IllegalArgumentException("shade() needs a ramp of 2+ blocks, dark to light");
-                double[] l = has(o, "light") ? nums(get(o, "light")) : new double[]{-0.35, 0.85, 0.4};
+                double[] l = new double[]{-0.35, 0.85, 0.4};
+                if (has(o, "light")) {
+                    Object lo = get(o, "light");
+                    double[] given = lo instanceof NativeArray a && a.getLength() == 3 ? nums(lo) : null;
+                    if (given != null && Math.abs(given[0]) + Math.abs(given[1]) + Math.abs(given[2]) > 1e-9) l = given;
+                    // the light only steers the shading, so a wrong value keeps the default instead of stopping the script
+                    else run.canvas.warn("auto-corrected: shade() light must be a direction [x, y, z], not " + Context.toString(lo) + "; the default upper south-west light was used");
+                }
                 double len = Math.sqrt(l[0] * l[0] + l[1] * l[1] + l[2] * l[2]);
-                if (l.length != 3 || len < 1e-9) throw new IllegalArgumentException("shade() light must be [x, y, z]");
                 yield new Material.Shade(ramp, new double[]{l[0] / len, l[1] / len, l[2] / len},
                         has(o, "height") ? num(get(o, "height")) : 0.25, has(o, "cavity") ? num(get(o, "cavity")) : 0.9, run.noise);
             }
@@ -955,6 +989,7 @@ public final class ScriptRuntime {
 
     static double num(Object o) {
         if (o == null || Undefined.isUndefined(o)) throw new IllegalArgumentException("missing number");
+        if (o instanceof NativeArray) throw new IllegalArgumentException("expected a number, got an array [" + Context.toString(o) + "]");
         double d = Context.toNumber(o);
         if (!Double.isFinite(d)) throw new NonFiniteException("number is not finite (" + Context.toString(o) + ")");
         return d;
@@ -1009,7 +1044,7 @@ public final class ScriptRuntime {
             for (int i = 0; i < a.getLength(); i++) out.add(a.get(i));
             return out;
         }
-        throw new IllegalArgumentException("expected an array");
+        throw new IllegalArgumentException("expected an array, got " + (o == null || Undefined.isUndefined(o) ? "nothing" : Context.toString(o)));
     }
 
     private static Object get(Scriptable o, String key) {
@@ -1029,6 +1064,17 @@ public final class ScriptRuntime {
 
     private static boolean bool(Scriptable o, String key) {
         return o != null && has(o, key) && Context.toBoolean(get(o, key));
+    }
+
+    /** paint()'s {from:'south'}: the side its pattern is seen from, or -1; an unknown side paints as before, with a warning. */
+    private static int from(Run run, Scriptable o) {
+        if (o == null || !has(o, "from")) return -1;
+        Object v = get(o, "from");
+        String side = v == null || v instanceof org.mozilla.javascript.Undefined ? "" : Context.toString(v).toLowerCase(java.util.Locale.ROOT);
+        int i = Rasterizer.FROM.indexOf(side);
+        if (i < 0) run.canvas.warn("auto-corrected: from must be one of " + String.join("/", Rasterizer.FROM) + ", not '" + side
+                + "'; that repaint covered every block in its shape");
+        return i;
     }
 
     private static double number(Scriptable o, String key, double fallback) {

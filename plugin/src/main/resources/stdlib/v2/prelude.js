@@ -286,7 +286,16 @@ function blend(k) { return _S({ t: 'blend', k: k, of: _args(arguments, 1) }); }
  */
 function place(shape, m, opts) { return __place(shape, m, opts || {}); }
 function carve(shape) { return __place(shape, 'air', { carve: true }); }
-function paint(shape, m) { return __place(shape, m, { onlySolid: true }); }
+/**
+ * Repaints the blocks already there. opts.from ('north'|'south'|'west'|'east'|'up'|'down'): only the first block along
+ * each line through the shape from that side, so eyes, a mouth, a sign or a stripe lie as one layer on the surface seen
+ * from there instead of wrapping into the blocks behind a curve.
+ */
+function paint(shape, m, opts) {
+  var o = { onlySolid: true };
+  if (opts && opts.from !== undefined) o.from = opts.from;
+  return __place(shape, m, o);
+}
 
 // ---------------------------------------------------------------- materials
 

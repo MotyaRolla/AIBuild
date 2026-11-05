@@ -1,9 +1,14 @@
 # HANDBOOK: review — how a professional checks a build
 Look at it, from these views, every pass (use look with free cameras):
-1. Far view (whole silhouette): one clear focal point? masses of different size? an interesting skyline?
+1. Far view (whole silhouette): does the outline have the real subject's proportions (widest where it is
+   widest, its height to width, each mass against the others)? one clear focal point? masses of different size?
+   an interesting skyline? An outline that is wrong is fixed first, by resizing masses, before any detail.
 2. Eye level, from where a player arrives (2 blocks above the ground, 10-20 blocks out): does the entrance invite?
    is anything hiding the subject? does the ground look lived in?
-3. Close-ups of the focal areas: depth layers present? sills, frames, trims? no single-block lines?
+3. Close-ups of the focal areas: depth layers present? sills, frames, trims? no single-block lines? The studio
+   shows the details the eye goes to first (a face, a door, an emblem) up close with each version: from a few
+   blocks away, does each read as what it is, level, symmetric and flush, with nothing of another part over it?
+   A detail that only reads in the far view is not done.
 4. Top view: plan readable, paths lead somewhere, no empty corners on the plot.
 In the studio the RED PEN measures several of these for you (floating pieces, flat walls, missing eaves, noise) and
 circles them; when you hesitate between ideas, option() builds them side by side. Then fix the biggest problem first.

@@ -45,6 +45,19 @@ public final class Canvas {
     private int damageCells;
     /** Wall cells one top-level part replaced in another, per "victim|culprit": count and box. */
     private final Map<String, int[]> overlap = new LinkedHashMap<>();
+    /**
+     * Blocks of one part that a later part's place() wrote over with a clearly different colour, per "victim|culprit",
+     * with the block that was there: an ear placed through an eye, a beam through a window. A repaint is not counted;
+     * recolouring what is there is what paint() is for.
+     */
+    private final Map<String, Map<Long, BlockSpec>> covered = new LinkedHashMap<>();
+    private int coveredCells;
+    private boolean repainting;
+    /** Each repaint's visible changes, cell -> block written, with the part it ran in: a mark that later writes hid. */
+    private final List<Map<Long, BlockSpec>> marks = new ArrayList<>();
+    private final List<String> markParts = new ArrayList<>();
+    private Map<Long, BlockSpec> mark;
+    private int markCells;
     /** Calls so far per part path, so every call of a part gets its own random stream. */
     private final Map<String, Integer> partCalls = new HashMap<>();
     /** The tree being placed (trees nest no further), and the tree that placed each cell still standing. */
@@ -560,6 +573,11 @@ public final class Canvas {
         String victim = owner.getOrDefault(k, NO_PART), culprit = currentPart();
         // the finisher's own repairs are checked by the pipeline, not counted as damage
         if (culprit.equals("finish")) return;
+        if (mark != null && spec != null && !spec.isAir() && markCells < 50_000 && contrast(old, spec) && mark.put(k, spec) == null) markCells++;
+        if (!repainting && spec != null && !spec.isAir() && !victim.equals(culprit) && !NO_PART.equals(victim)
+                && coveredCells < 20_000 && contrast(old, spec)) {
+            if (covered.computeIfAbsent(victim + "|" + culprit, q -> new LinkedHashMap<>()).putIfAbsent(k, old) == null) coveredCells++;
+        }
         String vTop = top(victim), cTop = top(culprit);
         if (!vTop.equals(cTop) && BlockRoles.structural(old, info)) {
             int[] o = overlap.computeIfAbsent(vTop + "|" + cTop, q -> new int[]{0, x, y, z, x, y, z});
@@ -579,6 +597,103 @@ public final class Canvas {
     private static String top(String part) {
         int i = part.indexOf('/');
         return i < 0 ? part : part.substring(0, i);
+    }
+
+    /** Set while a repaint (paint(), onlySolid) writes: recolouring is meant, so it covers nothing. */
+    void repainting(boolean on) {
+        repainting = on;
+        if (on && marks.size() < 5_000) {
+            mark = new LinkedHashMap<>();
+            marks.add(mark);
+            markParts.add(currentPart());
+        } else {
+            mark = null;
+        }
+    }
+
+    /**
+     * Repaints of which nothing shows at the end: every block the paint changed was written over later (by its own
+     * part or another), e.g. a nose painted and then wiped by a collar painted after it. One line each.
+     */
+    public List<String> hiddenMarks() {
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < marks.size() && out.size() < 8; i++) {
+            Map<Long, BlockSpec> m = marks.get(i);
+            if (m.isEmpty()) continue;
+            boolean shows = false;
+            for (Map.Entry<Long, BlockSpec> e : m.entrySet()) {
+                long k = e.getKey();
+                BlockSpec cur = model.get(VoxelModel.kx(k), VoxelModel.ky(k), VoxelModel.kz(k));
+                if (cur != null && cur.name().equals(e.getValue().name())) {
+                    shows = true;
+                    break;
+                }
+            }
+            if (shows) continue;
+            long k = m.keySet().iterator().next();
+            BlockSpec now = model.get(VoxelModel.kx(k), VoxelModel.ky(k), VoxelModel.kz(k));
+            out.add("in part('" + markParts.get(i) + "') a paint of " + m.values().iterator().next().name() + " (" + m.size() + " block"
+                    + (m.size() == 1 ? "" : "s") + ", e.g. at " + VoxelModel.kx(k) + "," + VoxelModel.ky(k) + "," + VoxelModel.kz(k)
+                    + ") is entirely written over later (now " + (now == null || now.isAir() ? "air" : now.name())
+                    + "): nothing of it shows; if it is meant to, write it after what covers it, or keep that off it with onlyAir");
+        }
+        return out;
+    }
+
+    /** Two blocks a viewer tells apart at a glance: their colours lie far apart. */
+    private boolean contrast(BlockSpec a, BlockSpec b) {
+        int p = colour(a), q = colour(b);
+        int dr = (p >> 16 & 255) - (q >> 16 & 255), dg = (p >> 8 & 255) - (q >> 8 & 255), db = (p & 255) - (q & 255);
+        return dr * dr + dg * dg + db * db > 100 * 100;
+    }
+
+    /**
+     * Parts that still cover a noticeable share of another part's blocks at the end: cells a later part placed over
+     * with a contrasting block, that are still that part's, still contrasting and in sight (next to open air). One
+     * line each, for the model to judge; a share under 10% of the covered part is how parts meet and is not listed.
+     */
+    public List<String> coveredNotes() {
+        Map<String, Integer> size = new HashMap<>();
+        for (String o : owner.values()) size.merge(o, 1, Integer::sum);
+        List<String> out = new ArrayList<>();
+        covered.forEach((key, cells) -> {
+            String[] p = key.split("\\|", 2);
+            int still = 0;
+            long first = 0;
+            String was = null, now = null;
+            for (Map.Entry<Long, BlockSpec> e : cells.entrySet()) {
+                long k = e.getKey();
+                int x = VoxelModel.kx(k), y = VoxelModel.ky(k), z = VoxelModel.kz(k);
+                BlockSpec cur = model.get(x, y, z);
+                if (cur == null || cur.isAir() || !p[1].equals(owner.get(k)) || !contrast(e.getValue(), cur) || !inSight(x, y, z)) continue;
+                if (still++ == 0) {
+                    first = k;
+                    was = e.getValue().name();
+                    now = cur.name();
+                }
+            }
+            int left = size.getOrDefault(p[0], 0);
+            if (still == 0 || still < 0.10 * (left + still)) return;
+            out.add("part('" + p[1] + "') covers " + still + " of part('" + p[0] + "')'s " + (left + still) + " blocks in sight ("
+                    + was + " -> " + now + ", e.g. at " + VoxelModel.kx(first) + "," + VoxelModel.ky(first) + "," + VoxelModel.kz(first)
+                    + "): the part written later wins where two overlap; if that is not meant, place it with onlyAir or move it");
+        });
+        return out;
+    }
+
+    private final Map<String, Integer> colours = new HashMap<>();
+
+    private int colour(BlockSpec b) {
+        return colours.computeIfAbsent(b.name(), n -> dev.aibuild.analysis.IsoRenderer.colourOf(b, info));
+    }
+
+    private boolean inSight(int x, int y, int z) {
+        int[][] d = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+        for (int[] s : d) {
+            BlockSpec n = model.get(x + s[0], y + s[1], z + s[2]);
+            if (n == null || n.isAir()) return true;
+        }
+        return false;
     }
 
     /** Wall cells one top-level part overwrote in another: "victim|culprit" -> {cells, x1, y1, z1, x2, y2, z2}. */

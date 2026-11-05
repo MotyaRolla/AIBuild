@@ -136,13 +136,14 @@ script:
 # The studio (generation.create-strategy: studio, or the "studio" bench variant). The plugin executes and reports;
 # the AI decides everything else. Only these limits remain:
 studio:
-  # wall clock of a new build in minutes; the AI sees the time left in every reply and ships when it is done
+  # wall clock limit of a new build in minutes (a limit, not a target): the AI sees the time left in every reply
+  # and says DONE as soon as the build is right
   # (or the current version ships when the time is up)
   minutes:
-    fast: 8
-    light: 15
-    standard: 30
-    extra: 60
+    fast: 6
+    light: 10
+    standard: 25
+    extra: 45
   # parallel sessions of a new build; with 2+ the blind pairwise judge picks one (no extra wall time)
   sessions:
     fast: 1

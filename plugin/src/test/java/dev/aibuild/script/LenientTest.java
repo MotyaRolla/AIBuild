@@ -81,6 +81,15 @@ class LenientTest {
         assertTrue(warned(r, "auto-corrected: 'polished_andesite_wall' -> 'andesite_wall'"), () -> r.warnings().toString());
     }
 
+    @Test void aBlendRadiusOutOfRangeUsesTheNearestBlendThatExists() {
+        ScriptResult r = run("place(blend(0.0, sphere([-2, 5, 0], 1.5), sphere([2, 5, 0], 1.5)), 'stone');\n"
+                + "place(blend(40, sphere([0, 12, 0], 2)), 'dirt');");
+        assertEquals("stone", at(r, -2, 5, 0));
+        assertEquals("stone", at(r, 2, 5, 0));
+        assertEquals("air", at(r, 0, 5, 0), "radius 0 is a plain union: nothing is filled between the spheres");
+        assertTrue(warned(r, "blend() radius must be > 0") && warned(r, "clamped to 16"), () -> r.warnings().toString());
+    }
+
     @Test void aPropertyTheBlockDoesNotHaveIsDropped() {
         ScriptResult r = run("block(0, 1, 0, 'lantern[hanging=true,color=red]');");
         assertEquals("lantern", at(r, 0, 1, 0));
@@ -108,6 +117,26 @@ class LenientTest {
     @Test void stairsOfASlabAreTheStairsOfItsMaterial() {
         ScriptResult r = run("block(0, 1, 0, stair('spruce_slab', 'north'));");
         assertEquals("spruce_stairs", at(r, 0, 1, 0));
+    }
+
+    @Test void aSphereGivenPerAxisRadiiIsBuiltAsTheEllipsoidItDescribes() {
+        ScriptResult r = run("place(sphere([0, 5, 0], [4, 2, 4]), 'stone');");
+        assertEquals("stone", at(r, 3, 5, 0));
+        assertEquals("air", at(r, 0, 8, 0), "2 high, not 4");
+        assertTrue(warned(r, "ellipsoid() was used"), () -> r.warnings().toString());
+    }
+
+    @Test void aShadeLightThatIsNotADirectionKeepsTheDefaultLight() {
+        ScriptResult r = run("place(sphere([0, 5, 0], 3), shade(['black_concrete', 'gray_concrete'], {light: 1}));");
+        assertNotEquals("air", at(r, 0, 5, 3));
+        assertTrue(warned(r, "light must be a direction"), () -> r.warnings().toString());
+    }
+
+    @Test void anErrorQuotesTheScriptAsTheModelWroteIt() {
+        ScriptResult r = runtime.run("const a = 1;\nconst b = mix(5);\n", 3, null, null, ScriptRuntime.Budget.standard(), null);
+        assertFalse(r.ok());
+        assertTrue(r.error().excerpt().contains("const b = mix(5);"), r.error().excerpt());
+        assertFalse(r.error().excerpt().contains("let  "), "SEARCH lines copied from the traceback must match the script");
     }
 
     @Test void aNanCoordinateSkipsOnlyThatWrite() {

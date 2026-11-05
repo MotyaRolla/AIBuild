@@ -47,6 +47,24 @@ class StudioTest {
         assertTrue(t.changes());
     }
 
+    @Test void toolCallsInTheModelsNativeMarkupAreReadAsTools() {
+        var t = StudioProtocol.parse("""
+                Let me check the guide.
+
+                <｜｜DSML｜｜ calls>
+                <｜｜DSML｜｜ invoke name="guide">organic</｜｜DSML｜｜ parameter>
+                </｜｜DSML｜｜ invoke>
+                </｜｜DSML｜｜ calls>
+                <｜｜DSML｜｜ invoke name="look">
+                [{"eye":"south","distance":14},{"side":"sw"}]
+                </look>
+                """);
+        assertEquals(List.of("organic"), t.guides());
+        assertEquals(2, t.looks().size());
+        assertTrue(t.problems().isEmpty(), () -> t.problems().toString());
+        assertNull(t.script());
+    }
+
     @Test void toolsAndCommandsAreReadTogether() {
         var t = StudioProtocol.parse("""
                 Looking closer.
@@ -122,13 +140,22 @@ class StudioTest {
             this.pool = pool;
         }
 
-        /** The blind judge's answers, by call; "SAME" when none are left. */
+        /**
+         * The blind judge's answers, "SAME" when none are left. A pair judged in parallel (tags ending in a and b)
+         * takes two answers in that order, whichever call arrives first.
+         */
         final Deque<String> judgeAnswers = new ArrayDeque<>();
         final List<String> judgeTags = new ArrayList<>();
+        private final java.util.Map<String, String[]> pairs = new java.util.HashMap<>();
 
         public synchronized String judge(List<ChatMessage> msgs, String tag) {
             judgeTags.add(tag);
-            return judgeAnswers.isEmpty() ? "SAME\nno difference" : judgeAnswers.poll();
+            char last = tag.charAt(tag.length() - 1);
+            if (last != 'a' && last != 'b') return judgeAnswers.isEmpty() ? "SAME\nno difference" : judgeAnswers.poll();
+            String[] pair = pairs.computeIfAbsent(tag.substring(0, tag.length() - 1), k -> new String[]{
+                    judgeAnswers.isEmpty() ? "SAME\nno difference" : judgeAnswers.poll(),
+                    judgeAnswers.isEmpty() ? "SAME\nno difference" : judgeAnswers.poll()});
+            return pair[last == 'a' ? 0 : 1];
         }
 
         public synchronized String call(List<ChatMessage> msgs, String tag) {
@@ -207,7 +234,7 @@ class StudioTest {
         assertTrue(reply.contains("INTENT: a 7x7 stone hut"), "the notes come back: " + reply);
         assertTrue(reply.contains("v1 whole script:") && reply.contains("You: Walls first."), "the journal: " + reply);
         assertTrue(reply.contains("THE SCRIPT OF VERSION 1") && reply.contains("box(0,1,0,6,4,6"), reply);
-        assertTrue(reply.contains("No time limit; turn 2 of at most 40"), reply);
+        assertTrue(reply.contains("No time limit; turn 2 (limits, not targets"), reply);
         assertFalse(reply.contains("Walkable zones"), "the spatial report only on REPORT");
     }
 
@@ -241,6 +268,28 @@ class StudioTest {
         assertEquals(3, o.turns());
         assertEquals(1, o.shipped().n());
         assertTrue(host.sent.get(2).getLast().content().contains("DONE was not taken"));
+    }
+
+    @Test void doneSentWithAChangeWaitsUntilTheModelHasSeenIt() throws Exception {
+        Scripted host = new Scripted(null, HOUSE, HOUSE.replace("6,4,6", "6,5,6") + "\nDONE", "DONE");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        assertEquals(3, o.turns());
+        assertEquals(2, o.shipped().n());
+        String reply = host.sent.get(2).getLast().content();
+        assertTrue(reply.contains("DONE is waiting: version 2 came from this same answer"), reply);
+        assertTrue(reply.contains("VERSION 2"), "the reply shows what was not seen yet: " + reply);
+    }
+
+    @Test void doneSentWithAChangeShipsAtOnceWhenTimeIsShort() throws Exception {
+        AtomicLong now = new AtomicLong(0);
+        StudioSession.Settings s = settings();
+        s.clock = now::get;
+        s.deadlineNanos = java.util.concurrent.TimeUnit.SECONDS.toNanos(100);
+        Scripted host = new Scripted(null, HOUSE, HOUSE.replace("6,4,6", "6,5,6") + "\nDONE");
+        StudioSession.Outcome o = session(host, s).run(null);
+        assertEquals(2, o.turns());
+        assertEquals(2, o.shipped().n());
+        assertTrue(o.done());
     }
 
     @Test void anEditStartsFromTheStoredScriptAsVersionOne() throws Exception {
@@ -334,7 +383,7 @@ class StudioTest {
             s.eyes = true;
             s.verify = true;
             s.imageSize = 320;
-            Scripted host = new Scripted(pool, HOUSE, HOUSE.replace("6,4,6", "9,9,9"), "DONE");
+            Scripted host = new Scripted(pool, HOUSE, "REWRITE: a taller house\n" + HOUSE.replace("6,4,6", "9,9,9"), "Looking it over.", "DONE");
             // first call: A = before; second call (order swapped): B = before
             host.judgeAnswers.add("A\nthe proportions of A are right");
             host.judgeAnswers.add("B\nthe proportions of B are right");
@@ -343,10 +392,95 @@ class StudioTest {
             assertEquals(2, o.versions().size(), "the rewrite is kept as a version");
             assertEquals(1, o.checks());
             assertEquals(1, o.rejected());
-            assertTrue(host.sent.get(2).getLast().content().contains("BLIND CHECK") && host.sent.get(2).getLast().content().contains("REVERT 2"));
+            // the check runs while the model writes its next turn; the verdict comes with the reply after it
+            assertTrue(host.sent.get(2).getLast().content().contains("runs while you work"), host.sent.get(2).getLast().content());
+            String next = host.sent.get(3).getLast().content();
+            assertTrue(next.contains("BLIND CHECK") && next.contains("REVERT 2"), next);
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    private static String twoParts(String a, String b) {
+        return "```js\nmeta({title:'t'});\npart('a', () => { box(" + a + ",'stone'); });\npart('b', () => { box(" + b + ",'oak_planks'); });\n```";
+    }
+
+    @Test void aWholeNewScriptAfterTheFirstVersionNeedsAReasonOnlyWhenItRedrawsMostOfTheBuild() throws Exception {
+        String v1 = twoParts("0,1,0,4,5,4", "6,1,0,8,3,2");
+        Scripted host = new Scripted(null,
+                v1,
+                twoParts("0,1,0,5,6,5", "6,1,0,9,4,3"),                          // redraws both parts, no reason
+                "REWRITE: both parts at a larger scale\n" + twoParts("0,1,0,5,6,5", "6,1,0,9,4,3"),
+                twoParts("0,1,0,5,6,5", "6,1,0,9,5,3"),                          // resent with one small part changed
+                "DONE");
+        StudioSession.Outcome o = session(host, settings()).run(null);
+        String afterRedraw = host.sent.get(2).getLast().content();
+        assertTrue(afterRedraw.contains("the whole script was NOT applied") && afterRedraw.contains("REWRITE:"), afterRedraw);
+        assertEquals(3, o.versions().size(), "v1, the reasoned rewrite, and the resent script with a small change");
+        assertEquals(3, o.shipped().n());
+    }
+
+    @Test void theSubjectIsTheStackAroundTheTallestPartNotJustItsTop() {
+        Scripted host = new Scripted(null);
+        StudioSession session = session(host, settings());
+        ScriptRuntime rt = new ScriptRuntime(host.info, Stdlib.V2);
+        ScriptResult r = rt.run("""
+                part('scene/ground', () => { box(-15,0,-15,15,0,15,'grass_block'); });
+                part('scene/rock', () => { box(9,1,9,11,2,11,'stone'); });
+                part('pumpkin', () => { box(-4,1,-4,4,4,4,'pumpkin'); });
+                part('cat', () => { box(-2,5,-2,2,12,2,'black_wool'); });
+                part('hat', () => { box(-4,13,-3,4,13,5,'purple_wool'); box(-1,14,-1,1,20,1,'purple_wool'); });
+                """, 1, null, null, ScriptRuntime.Budget.standard(), new java.util.concurrent.atomic.AtomicBoolean());
+        assertTrue(r.ok(), () -> r.error().describe());
+        StudioSession.Subject sub = session.subject(r);
+        assertNotNull(sub);
+        assertTrue(sub.name().contains("hat") && sub.name().contains("cat") && sub.name().contains("pumpkin"), sub.name());
+        assertFalse(sub.name().contains("scene"), sub.name());
+        assertEquals(1, sub.box()[1], "it reaches down to the pumpkin");
+        assertEquals(20, sub.box()[4]);
+    }
+
+    private static ScriptResult run(Scripted host, String script) {
+        ScriptResult r = new ScriptRuntime(host.info, Stdlib.V2).run(script, 1, null, null, ScriptRuntime.Budget.standard(),
+                new java.util.concurrent.atomic.AtomicBoolean());
+        assertTrue(r.ok(), () -> r.error().describe());
+        return r;
+    }
+
+    @Test void aPartHeldUpByAThirdPartOverAnAirGapIsReportedAsHovering() {
+        Scripted host = new Scripted(null);
+        // the lid is held up by a post, so it is connected, yet it hovers one block over the base
+        List<String> h = StudioSession.hovering(run(host, """
+                part('base', () => { box(0,1,0,6,3,6,'stone'); });
+                part('post', () => { box(0,4,0,0,4,0,'oak_log'); });
+                part('lid', () => { box(0,5,0,6,5,6,'oak_planks'); });
+                """));
+        assertEquals(1, h.size(), h.toString());
+        assertTrue(h.getFirst().startsWith("part lid hovers over part base"), h.getFirst());
+        // resting on it, or over a closed space (a roof over a ceiling inside walls), is not
+        assertTrue(StudioSession.hovering(run(host, """
+                part('base', () => { box(0,1,0,6,3,6,'stone'); });
+                part('lid', () => { box(0,4,0,6,4,6,'oak_planks'); });
+                """)).isEmpty());
+        assertTrue(StudioSession.hovering(run(host, """
+                part('walls', () => { box(0,1,0,8,5,8,'stone_bricks',{walls:true}); });
+                part('ceiling', () => { box(1,3,1,7,3,7,'oak_planks'); });
+                part('roof', () => { box(0,6,0,8,6,8,'spruce_planks'); });
+                """)).isEmpty());
+    }
+
+    @Test void oneMoreChangeToThePartChangedInTheLastVersionsIsPointedOut() throws Exception {
+        Scripted host = new Scripted(null,
+                "```js\npart('house', () => { box(0,1,0,6,4,6,'stone_bricks'); });\npart('roof', () => { box(0,5,0,6,5,6,'oak_planks'); });\n```",
+                "```js\npart('roof', () => { box(0,5,0,6,5,6,'spruce_planks'); });\n```",
+                "```js\npart('roof', () => { box(0,5,0,6,6,6,'spruce_planks'); });\n```",
+                "```js\npart('roof', () => { box(0,5,0,6,7,6,'spruce_planks'); });\n```",
+                "DONE");
+        session(host, settings()).run(null);
+        assertFalse(host.sent.get(3).getLast().content().contains("has changed in each"), "two changes are not a run yet");
+        String reply = host.sent.get(4).getLast().content();
+        assertTrue(reply.contains("part('roof') has changed in each of the last 3 versions (since version 1)"), reply);
+        assertTrue(reply.contains("REVERT 1"), reply);
     }
 
     @Test void aSplitJudgmentKeepsTheNewVersion() throws Exception {
@@ -392,6 +526,43 @@ class StudioTest {
         }
     }
 
+    @Test void draftsAreAskedAgainOnlyWhenEveryOneCameBackWithoutReasoning() throws Exception {
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            String tall = HOUSE.replace("6,4,6", "6,9,6");
+            for (boolean bothUnthought : new boolean[]{true, false}) {
+                StudioSession.Settings s = settings();
+                s.firstDrafts = 2;
+                List<String> rethought = new java.util.concurrent.CopyOnWriteArrayList<>();
+                Scripted host = new Scripted(pool, "DONE") {
+                    @Override public synchronized String call(List<ChatMessage> msgs, String tag) {
+                        if (tag.endsWith("-t1x2") || tag.endsWith("-t1")) return HOUSE;
+                        return "DONE";
+                    }
+
+                    @Override public boolean unreasoned(String tag) {
+                        return bothUnthought || tag.endsWith("-t1x2");
+                    }
+
+                    @Override public String rethink(List<ChatMessage> msgs, String tag) {
+                        rethought.add(tag);
+                        return tall;
+                    }
+                };
+                StudioSession.Outcome o = session(host, s).run(null);
+                if (bothUnthought) {
+                    assertEquals(2, rethought.size(), "both drafts asked again: " + rethought);
+                    assertEquals(9, o.shipped().result().model().solidBounds()[4], "the session starts from a rethought draft");
+                } else {
+                    assertTrue(rethought.isEmpty(), "one draft reasoned, so none is asked again: " + rethought);
+                    assertEquals(4, o.shipped().result().model().solidBounds()[4]);
+                }
+            }
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
     @Test void aDraftThatLooksThingsUpFirstGetsItsAnswersAndStaysInTheRunning() throws Exception {
         ExecutorService pool = Executors.newCachedThreadPool();
         try {
@@ -421,6 +592,111 @@ class StudioTest {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    @Test void aDraftThatLooksThingsUpWritesItsScriptWhileTheOtherDraftIsStillThinking() throws Exception {
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            StudioSession.Settings s = settings();
+            s.eyes = true;
+            s.imageSize = 320;
+            s.firstDrafts = 2;
+            String other = HOUSE.replace("6,4,6", "6,9,6");
+            java.util.concurrent.CountDownLatch looked = new java.util.concurrent.CountDownLatch(1);
+            java.util.concurrent.atomic.AtomicBoolean waited = new java.util.concurrent.atomic.AtomicBoolean();
+            Scripted host = new Scripted(pool, HOUSE, other, "DONE") {
+                @Override public String call(List<ChatMessage> msgs, String tag) {
+                    if (tag.endsWith("-t1x1-look")) {
+                        looked.countDown();
+                        return other;
+                    }
+                    if (tag.endsWith("-t1x2")) {
+                        try {
+                            waited.set(!looked.await(10, java.util.concurrent.TimeUnit.SECONDS));   // still thinking
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return HOUSE;
+                    }
+                    if (tag.endsWith("-t1")) return "```notes\nINTENT: a tall house\n```\n```blocks\nstone bricks\n```";
+                    return "DONE";
+                }
+            };
+            host.judgeAnswers.add("A\nA is taller");
+            host.judgeAnswers.add("B\nB is taller");
+            StudioSession.Outcome o = session(host, s).run(null);
+            assertFalse(waited.get(), "draft 1 got its lookups answered and wrote its script before draft 2 finished");
+            assertEquals(9, o.shipped().result().model().solidBounds()[4]);
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test void aDraftStillThinkingAtHalfTheSessionIsDroppedForTheOneThatRan() throws Exception {
+        for (boolean quickUnreasoned : new boolean[]{false, true}) slowDraftIsDropped(quickUnreasoned);
+    }
+
+    private void slowDraftIsDropped(boolean quickUnreasoned) throws Exception {
+        ExecutorService pool = Executors.newCachedThreadPool();
+        try {
+            StudioSession.Settings s = settings();
+            s.firstDrafts = 2;
+            long start = System.nanoTime();
+            s.clock = () -> System.nanoTime() - start;
+            s.deadlineNanos = java.util.concurrent.TimeUnit.SECONDS.toNanos(4);
+            java.util.concurrent.atomic.AtomicBoolean interrupted = new java.util.concurrent.atomic.AtomicBoolean();
+            Scripted host = new Scripted(pool, "DONE") {
+                @Override public String call(List<ChatMessage> msgs, String tag) {
+                    if (tag.endsWith("-t1x2")) {
+                        try {
+                            Thread.sleep(30_000);        // thinks far past half of the session
+                        } catch (InterruptedException e) {
+                            interrupted.set(true);
+                            throw new RuntimeException("stopped");
+                        }
+                        return HOUSE;
+                    }
+                    if (tag.endsWith("-t1")) return HOUSE;
+                    if (tag.contains("-t1r")) return HOUSE;
+                    synchronized (this) {
+                        sent.add(msgs);
+                    }
+                    return "DONE";
+                }
+
+                @Override public boolean unreasoned(String tag) {
+                    return quickUnreasoned && tag.endsWith("-t1");   // a quick draft that thought in its answer
+                }
+            };
+            StudioSession.Outcome o = session(host, s).run(null);
+            long took = System.nanoTime() - start;
+            assertTrue(took < java.util.concurrent.TimeUnit.SECONDS.toNanos(4), "the session did not wait for the slow draft: " + took);
+            assertEquals(1, o.shipped().n());
+            assertTrue(host.sent.getFirst().getLast().content().contains("1 of them ran; 1 call(s) still thinking at half the session time were stopped"),
+                    host.sent.getFirst().getLast().content());
+            for (int i = 0; i < 50 && !interrupted.get(); i++) Thread.sleep(20);
+            assertTrue(interrupted.get(), "the slow draft's call was stopped");
+        } finally {
+            pool.shutdownNow();
+        }
+    }
+
+    @Test void theLastFullScriptOfAnAnswerIsTheOneMeant() {
+        String first = "part('a', () => { block(0, 1, 0, 'stone'); block(1, 1, 0, 'stone'); block(2, 1, 0, 'stone'); });";
+        String fixed = "part('a', () => { block(0, 1, 0, 'dirt'); block(1, 1, 0, 'dirt'); });";
+        var t = StudioProtocol.parse("Draft:\n```js\n" + first + "\n```\nWait, dirt is better.\n```js\n" + fixed + "\n```\n```js\nconst K = 1;\n```");
+        assertEquals(fixed + "\n", t.script());
+    }
+
+    @Test void everyDraftStreamsToItsOwnTabAndLaterTurnsToTheProgram() {
+        assertEquals("draft1", BuildPipeline.studioStream("studio-t1"));
+        assertEquals("draft1", BuildPipeline.studioStream("studio-t1x1-look"));
+        assertEquals("draft2", BuildPipeline.studioStream("studio-t1x2"));
+        assertEquals("draft2", BuildPipeline.studioStream("studio-t1r2-look"));
+        assertEquals("draft2", BuildPipeline.studioStream("studio-t1fix2"));
+        assertEquals("program", BuildPipeline.studioStream("studio-t2"));
+        assertEquals("program", BuildPipeline.studioStream("studio-t12"));
+        assertNull(BuildPipeline.studioStream("studio-d1-t3"));
     }
 
     private static final String OPTION_HOUSE = """

@@ -1,5 +1,9 @@
 # HANDBOOK: massing — silhouette first
 A professional blocks out the masses before any detail, and judges the silhouette from far away and at eye level.
+- Outline from the real subject: before any size, picture it from the main view and note where it is widest,
+  how it tapers and its height to width; size the masses to those ratios, and compare the far view's outline with
+  them. A wrong outline (a column where the subject is a pear, a box where it is a cone) is fixed by resizing the
+  masses, never by detail on them.
 - Primary, secondary, tertiary: one dominant mass, 1-3 secondary masses clearly smaller (60-80% of its height or
   width), then tertiary forms (porches, chimneys, dormers, bay windows, buttresses). Never several equal boxes.
 - Break the box: offsets in plan (L, T, U shapes), different heights, roofs at different levels and directions,

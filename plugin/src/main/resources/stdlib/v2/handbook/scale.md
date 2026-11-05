@@ -8,6 +8,12 @@ detail is placed. Measure by these numbers:
   a curtain wall 8-14 high, 3-5 thick with a walkway; towers stand 4-8 above the wall they flank.
 - Trees: an oak 8-14, a big oak 15-25, a giant/hero tree 25-45 with a trunk 3-7 wide at the base.
 - Statues: decide the height first, then proportions from it (a human is ~7.5 heads; head = height/7.5).
+- Figures and objects smaller than a room in life (a cat, a person, a teapot, a lantern) are built as statues,
+  sized from their smallest feature that must read: an eye is at least 1 block with 1 block between the eyes, so
+  a face is 7+ wide. Below that the features merge into a column of blocks and no edit can fix it; "small" means
+  the low end of the readable size, not life size. That feature sets the scale, not the shape: every other mass
+  then takes its real proportion to it (a body against its head, a lid against its pot), never the size left over
+  once the feature fits. A body sized down to the head, or a base sized up to fill the plot, breaks the outline.
 - Detail needs room: a feature under 3 blocks wide cannot carry an arch, a frame and a sill at once. When the
   request says "huge", detail grows with the size: a 60-block keep gets 2-block mouldings, not 1-block lines.
 - Scale against the player, not against the plot: a door, a window and a stair step must still be player-sized

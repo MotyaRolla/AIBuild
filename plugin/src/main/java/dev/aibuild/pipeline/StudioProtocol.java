@@ -8,6 +8,7 @@ import dev.aibuild.script.ScriptPatch;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.Locale;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -68,12 +69,24 @@ public final class StudioProtocol {
 
     private static final Pattern PICK = Pattern.compile("(?m)^\\s*(?:\\*\\*)?PICK(?:\\*\\*)?\\b:?[ \\t]*(.+)$");
     private static final Pattern KEEP = Pattern.compile("(?m)^\\s*(?:\\*\\*)?KEEP(?:\\*\\*)?\\b:?[ \\t]*([0-9][0-9 ,\\t]*)$");
+    /**
+     * The whole script of an answer: the last block at least half as long as the longest. A model that drafts its
+     * script in the answer and then writes it again corrected ends with the version it means; the longest block may
+     * be the first draft, and a short fragment after it (a helper, a constant) is not the script.
+     */
+    static String finalScript(List<String> blocks) {
+        int longest = 0;
+        for (String b : blocks) longest = Math.max(longest, b.length());
+        for (int i = blocks.size() - 1; i >= 0; i--) if (blocks.get(i).length() * 2 >= longest) return blocks.get(i);
+        return null;
+    }
+
     /** TAKE part[, part...] FROM n: those parts as they are in version n replace the ones in the current script. */
     private static final Pattern TAKE = Pattern.compile("(?m)^\\s*(?:\\*\\*)?TAKE(?:\\*\\*)?\\b:?[ \\t]*(.+?)[ \\t]+(?:FROM|from)[ \\t]+v?(\\d+)[ \\t.]*(?:\\*\\*)?[ \\t]*$");
     private static final Pattern PREFER = Pattern.compile("(?m)^\\s*(?:\\*\\*)?PREFER(?:\\*\\*)?\\b:?[ \\t]*\\(?([ABab])\\)?[ \\t.]*(?:\\*\\*)?[ \\t]*$");
 
     public static Turn parse(String answer) {
-        String text = answer == null ? "" : answer;
+        String text = nativeCalls(answer == null ? "" : answer);
         List<String> problems = new ArrayList<>();
         List<JsonObject> looks = new ArrayList<>();
         List<int[]> inspects = new ArrayList<>();
@@ -114,9 +127,9 @@ public final class StudioProtocol {
                     && body.contains("(")) {
                 // every code block counts, in order: several part() blocks in one answer all apply
                 blocks.add(body.strip() + "\n");
-                if (script == null || body.strip().length() + 1 > script.length()) script = body.strip() + "\n";
             }
         }
+        script = finalScript(blocks);
         rest.append(text.substring(last));
         String code = rest.toString();
         List<String[]> hunks = ScriptPatch.hunksOf(code);
@@ -246,5 +259,36 @@ public final class StudioProtocol {
     private static String clip(String s) {
         if (s == null) return "";
         return s.length() > 120 ? s.substring(0, 119) + "…" : s;
+    }
+
+    private static final Set<String> TOOLS = Set.of("look", "view", "views", "inspect", "guide", "handbook", "delegate", "notes", "note", "plan", "blocks", "block", "ids");
+    /** A tool call written in the model's own native markup, e.g. {@code <|DSML| invoke name="guide">walls</|DSML| parameter>}. */
+    private static final Pattern NATIVE_CALL = Pattern.compile("<[^<>\\n]{0,40}invoke\\s+name=\"([A-Za-z]+)\"[^<>]*>([\\s\\S]*?)</[^<>\\n]{0,40}>");
+    private static final Pattern NATIVE_TAG = Pattern.compile("</?[^<>\\n]{0,40}\\b(?:calls|invoke|parameter|function_calls)\\b[^<>\\n]*>");
+
+    /**
+     * Rewrites tool calls made in the model's native call markup as the fenced blocks of this protocol. Models trained
+     * on native tools sometimes fall back to it (4 of 16 logged sessions), and the guide or look they asked for was lost.
+     */
+    static String nativeCalls(String text) {
+        if (!text.contains("invoke")) return text;
+        Matcher m = NATIVE_CALL.matcher(text);
+        StringBuilder out = new StringBuilder();
+        while (m.find()) {
+            String name = m.group(1).toLowerCase(Locale.ROOT);
+            String body = NATIVE_TAG.matcher(m.group(2)).replaceAll("").strip();
+            m.appendReplacement(out, Matcher.quoteReplacement(TOOLS.contains(name) ? "\n```" + name + "\n" + body + "\n```\n" : m.group()));
+        }
+        m.appendTail(out);
+        return NATIVE_TAG.matcher(out).replaceAll("");
+    }
+
+    private static final Pattern REWRITE = Pattern.compile("(?mi)^[ \\t]*(?:\\*\\*)?REWRITE(?:\\*\\*)?[ \\t]*:[ \\t]*(?:\\*\\*)?[ \\t]*(\\S.*)$");
+
+    /** The reason given on a line "REWRITE: ..." outside code, or null: a whole new script after the first version needs one. */
+    public static String rewriteReason(String answer) {
+        if (answer == null) return null;
+        Matcher m = REWRITE.matcher(FENCE.matcher(answer).replaceAll(""));
+        return m.find() ? m.group(1).strip() : null;
     }
 }

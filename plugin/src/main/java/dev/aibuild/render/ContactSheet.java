@@ -97,7 +97,7 @@ public final class ContactSheet {
         int[] above = aboveGround(model);
         int[] target = subject != null ? subject : above;
         if (subject != null) {
-            out.add(single(model, info, VoxelRaster.closeup(subject, 1, w, h), opt, "the subject (" + subjectName + ") from the south-west, close"));
+            out.add(single(model, info, VoxelRaster.front(subject, w, h), opt, "the subject (" + subjectName + ") close, straight from the front (south)"));
         } else {
             out.add(single(model, info, VoxelRaster.iso(b, 2, w, h), opt, "whole build from the north-west (back left)"));
         }
@@ -173,6 +173,24 @@ public final class ContactSheet {
      * and south-west corners, and a player's view from the front, each camera the same for both.
      */
     public static java.util.List<byte[]> pairViews(VoxelModel a, VoxelModel b, BlockInfo info, int viewW) {
+        return pairViews(a, b, info, viewW, null);
+    }
+
+    /**
+     * As above, plus the subject (a box) close and straight from the front for both, when {@code subject} is not
+     * null: the details a player looks at (a face, a door, a sign) are a few pixels in the whole-build views.
+     */
+    public static java.util.List<byte[]> pairViews(VoxelModel a, VoxelModel b, BlockInfo info, int viewW, int[] subject) {
+        java.util.List<byte[]> out = pairViewsWhole(a, b, info, viewW);
+        if (subject != null && !out.isEmpty()) {
+            int HALF = half(viewW);
+            out.add(sideBySide(a, b, info, VoxelRaster.front(subject, HALF, HALF), VoxelRaster.Options.defaults(),
+                    "A: the subject from the front, close", "B: the subject from the front, close"));
+        }
+        return out;
+    }
+
+    private static java.util.List<byte[]> pairViewsWhole(VoxelModel a, VoxelModel b, BlockInfo info, int viewW) {
         int HALF = half(viewW);
         int[] u = union(a.solidBounds(), b.solidBounds());
         java.util.List<byte[]> out = new java.util.ArrayList<>();

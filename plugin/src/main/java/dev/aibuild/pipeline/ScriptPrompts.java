@@ -81,6 +81,10 @@ public final class ScriptPrompts {
             5. Static isolation: the subject floating in empty space, or so small the scenery dominates (a plot
                far wider than the subject, trees in front of it or taller than it close by).
             6. Uniform detail: the same resolution everywhere instead of concentrating it on the focal areas.
+            7. Parts that do not meet as they really do: something worn, carried or set on another part hovers above
+               it, or a trait the request itself covers (by what is worn or held, the pose, another part) is pushed
+               out to be seen and the covering part is lifted or shrunk for it. What rests on something touches it;
+               what the request covers stays covered.
 
             HOW MASTER BUILDERS WORK
             - Depth layers: every wall has at least 3 layers (structure/frame in front, infill set back, openings set
@@ -149,11 +153,15 @@ public final class ScriptPrompts {
                note with its reason, not a way to try again.
             3. Look closely before you call something done: close-ups and eye level ("look"), "inspect" for exact
                blocks. Distant views hide the faults players see.
-            4. DONE when the open issues are minor. Finishing early with a strong build beats a late regression.
+            4. DONE as soon as the build reads as the request from every side and at eye level and no open issue is
+               worth a turn, judged on a version you have seen: a change sent with DONE is shown to you first. The time is a limit, not a target: a small subject is usually done in a few turns, and
+               finishing early with a strong build beats a late regression.
 
             YOUR NOTES: write a ```notes block in your first answer and rewrite it whenever something changes. It is
             your memory across turns, shown back every turn:
-                INTENT: what makes the subject unmistakable; the key dimensions (fixed once the massing is settled)
+                INTENT: what makes the subject unmistakable; its outline from the main view (where it is widest, how
+                        it tapers, height to width); the key dimensions, each main mass against the others as in the
+                        real subject (fixed once the massing is settled)
                 PALETTE: blocks by role
                 PLAN: what is next, in order
                 ISSUES: open problems, each with where (part or box) and how you will fix it; remove fixed ones
@@ -173,9 +181,11 @@ public final class ScriptPrompts {
                  part of that name (or is added at the end); everything else stays exactly as it is. Several such
                  blocks and hunks in one answer all apply (hunks first, then the blocks). Helper code belongs inside
                  a part; a loose fragment (a function or constants alone) is not applied.
-              c) A ```js block with the whole script (it has meta()): the first version, or a rewrite. A rewrite of
-                 a working build is checked blind against the version before it (below). A whole script replaces
-                 everything, so do not mix it with hunks or part blocks in the same answer.
+              c) A ```js block with the whole script (it has meta()): the first version. After that a whole script
+                 that redraws most of the build is applied only with a line "REWRITE: <what the current design
+                 cannot do that the new one will>" before it (scale, massing or composition that no edit can reach);
+                 without that line it is not applied. A rewrite redraws every part, the good ones too, and is checked blind against the version
+                 before it (below). Do not mix it with hunks or part blocks in the same answer.
               d) TAKE part[, part] FROM n: those parts exactly as they are in version n replace the current ones,
                  e.g. to keep the good part of a version the blind check rejected.
               When an edit does not run, it stays as your DRAFT: the traceback and the draft are shown, and your
@@ -256,7 +266,7 @@ public final class ScriptPrompts {
                 what makes it unmistakable, settle scale and massing, write the script, then look at what you built
                 (from far, at eye level, close up), and improve it where it matters most, turn by turn, until you would
                 show it. %s
-                You have about %d minutes. There are no fixed steps: spend your turns where they improve the build.
+                You have at most %d minutes; say DONE as soon as it is right. There are no fixed steps: spend your turns where they improve the build.
                 %sStart with your ```notes and your first complete script: the whole composition at its final size.
                 """.formatted(Prompts.request("BUILD REQUEST", request), recipes.isBlank() ? "" : recipes + "\n", scale, minutes,
                 delegate ? "For a big build you can delegate parts to helpers once the whole exists, and keep working meanwhile.\n" : "");

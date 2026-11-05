@@ -6,6 +6,11 @@
 - Shade, don't paint flat: shade(ramp(base, 5), {light, cavity}) darkens creases and undersides, lights tops.
 - Detail by scale: at 10-20 blocks high, features are 1-2 blocks; carve eyes and mouths with carve(), add
   stairs/slabs at the silhouette for smoother curves (place(..., {smooth: true})).
+- Features sit in the surface, one layer, level and mirrored: give the face (or any front that carries marks) a
+  flat front plane, then paint(shape, m, {from: 'south'}) so a mark lands on the first block seen from that side;
+  a plain paint() box on a round surface wraps into the blocks behind and the mark breaks up into steps. Mirror
+  left/right features from one definition, and write any part that crosses them (ears, a brim, hair) before them
+  or with onlyAir. Judge them in the detail close-up, not the whole view, where they are a few pixels.
 - Rocks and cliffs: overlapping warped ellipsoids, mixed stone/andesite/tuff with moss on top surfaces.
 ```js
 part('statue', () => {

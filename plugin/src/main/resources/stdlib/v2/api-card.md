@@ -49,7 +49,8 @@ shape.move(x,y,z) .rot('x'|'y'|'z', deg, pivot?) .rotY(deg) .scale(s | sx,sy,sz)
 place(shape, m, {smooth:true, shell:t, onlyAir:true, onlySolid:true})   returns blocks written
    smooth: terraces sloped tops/undersides with matching stairs+slabs (domes, roofs, hulls, bodies, hills)
    shell: hollow solid with walls t thick (big masses, domes, hulls, towers)
-carve(shape)      paint(shape, m) (repaint only existing blocks)
+carve(shape)      paint(shape, m, {from:'south'}) (repaint only existing blocks; from: only the surface seen from that
+   side, one layer: eyes, mouths, signs and stripes on round or uneven surfaces)
 
 ## Materials (any block argument accepts these)
 'stone_bricks'   'oak_stairs[facing=north,half=top]'   '60%cobblestone,40%andesite' (per-block random)

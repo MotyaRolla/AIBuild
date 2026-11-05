@@ -14,6 +14,7 @@ import dev.aibuild.model.BlockInfo;
 import dev.aibuild.model.BlockSpec;
 import dev.aibuild.model.VoxelModel;
 import dev.aibuild.render.ContactSheet;
+import dev.aibuild.render.FocalDetails;
 import dev.aibuild.render.RedPen;
 import dev.aibuild.render.VoxelRaster;
 import dev.aibuild.script.ScriptLint;
@@ -47,6 +48,16 @@ public final class StudioSession {
     public interface Host {
         /** One model call with these messages; {@code tag} names it in logs and traces. */
         String call(List<ChatMessage> msgs, String tag) throws Exception;
+
+        /** Whether the answer to the call {@code tag} came back without any reasoning (kept as it was, not asked again). */
+        default boolean unreasoned(String tag) {
+            return false;
+        }
+
+        /** The same call asked again at an effort that reliably reasons, for drafts that all came back unreasoned. */
+        default String rethink(List<ChatMessage> msgs, String tag) throws Exception {
+            return call(msgs, tag);
+        }
 
         /** Doors, orientation and shape resolution, as every run that is shown or stored gets. */
         void prepare(ScriptResult r);
@@ -257,6 +268,7 @@ public final class StudioSession {
                 break;
             }
             StudioProtocol.Turn t = StudioProtocol.parse(answer);
+            rewriteReason = StudioProtocol.rewriteReason(answer);
             String diag = diagnosis(answer);
             if (!diag.isEmpty()) lastDiagnosis = diag;
             why = diag;
@@ -271,6 +283,9 @@ public final class StudioSession {
             int made = versions.size();
             preferShip = null;
             boolean failedChange = act(t, reply, images);
+            // the verdict on an earlier change, judged while the model worked: a reply never waits for it, except
+            // when the model says DONE, so what ships has had its check
+            collectCheck(reply, t.done());
             if (preferShip != null && !t.done() && !t.changes()) {
                 chosen = preferShip;
                 done = true;
@@ -282,16 +297,41 @@ public final class StudioSession {
                 Version parent = pick(newest.parent);
                 Delta d = parent == null ? null : delta(parent, newest);
                 reply.append('\n').append(report(newest, parent, d, images));
-                if (d != null && current == newest) verify(parent, newest, d, reply);
+                // many small changes to one part are each too small to check, but together they can drift away from
+                // what worked: every other step of such a run is checked against the version before it began
+                Streak st = d == null ? null : streak(newest);
+                boolean drift = st != null && st.length() >= 3;
+                if (drift) {
+                    reply.append("part('").append(st.part()).append("') has changed in each of the last ").append(st.length())
+                            .append(" versions (since version ").append(st.anchor().n).append("). If it still does not read as you want,"
+                            + " step back: look at the whole at the viewing distance, ask whether the subject as asked shows this part"
+                            + " at all and whether the changes moved what rests on or around it; then move on, or REVERT ")
+                            .append(st.anchor().n).append(".\n");
+                }
+                Version against = drift && st.length() % 2 == 1 ? st.anchor() : parent;
+                boolean worth = d != null && (d.big || !d.warnings.isEmpty() || against != parent);
+                if (d != null && current == newest && startCheck(against, newest, worth)) {
+                    if (t.done()) collectCheck(reply, true);
+                    else reply.append("(A blind check of ").append(against == parent ? "this change" : "version " + newest.n)
+                            .append(" against version ").append(against.n)
+                            .append(" runs while you work; its verdict comes with the first reply after it is made.)\n");
+                }
             }
             if (t.done() && !failedChange) {
                 chosen = pick(t.doneVersion());
-                if (chosen != null || current == null) {
+                // a change made in the same answer as DONE has not been seen by the model: while there is time for
+                // one more look, it is shown first and DONE is asked again, so what ships is what the model saw
+                if (chosen != null && chosen == newest && turn < s.maxTurns && left() > TimeUnit.SECONDS.toNanos(150)) {
+                    reply.append("DONE is waiting: version ").append(newest.n).append(" came from this same answer, so you have"
+                            + " not seen it yet. Read its report above; say DONE if it is what you meant, or fix what is off.\n");
+                    chosen = null;
+                } else if (chosen != null || current == null) {
                     done = true;
                     reason = "the model finished";
                     break;
+                } else {
+                    reply.append("DONE ").append(t.doneVersion()).append(": there is no such version.\n");
                 }
-                reply.append("DONE ").append(t.doneVersion()).append(": there is no such version.\n");
             } else if (t.done()) {
                 reply.append("DONE was not taken: the change in the same answer failed, so the build is not what you"
                         + " finished. Fix it, or say DONE to ship version ").append(current == null ? "-" : current.n).append(".\n");
@@ -304,6 +344,7 @@ public final class StudioSession {
             history.add(new Exchange(answer, reply.toString(), images));
         }
         stopHelpers();
+        cancelCheck();
         Version shipped = chosen != null ? chosen : current;
         return new Outcome(shipped, List.copyOf(versions), turn, done, reason, lastDiagnosis, checks, rejected);
     }
@@ -374,7 +415,7 @@ public final class StudioSession {
         List<String> missed = new ArrayList<>();
         // a whole script replaces everything: say so for what else the answer held, instead of mixing the two
         String whole = null;
-        List<String> loose = new ArrayList<>();
+        List<String> loose = new ArrayList<>(), wholes = new ArrayList<>();
         if (focus == null) {
             for (String blk : t.blocks()) {
                 if (!base.isEmpty() && partsOnly(blk) != null) continue;
@@ -382,16 +423,28 @@ public final class StudioSession {
                 // a smaller fragment (a helper function, a constant) would wipe the build, so it is named instead
                 boolean wholeLike = base.isEmpty() || blk.contains("meta(") || blk.length() * 2 >= base.length();
                 if (!wholeLike) loose.add(blk);
-                else if (whole == null || blk.length() > whole.length()) whole = blk;
+                else wholes.add(blk);
             }
+            // several whole scripts in one answer: the last full one is the model's final word
+            whole = StudioProtocol.finalScript(wholes);
         }
         for (String l : loose) {
             missed.add("a code block that is neither part() statements nor a whole script was NOT applied (it starts '"
                     + clip(firstLine(l.strip()), 80) + "'): put helper code inside a part, or change the script with hunks");
         }
-        if (whole != null) {
+        if (whole != null && current != null && draft == null && focus == null && rewriteReason == null && redrawnShare(current, whole) > 0.5) {
+            // a whole new script redraws every part, the ones that worked too, and costs a long answer: after the
+            // first version the build changes by edits unless the model names what the design itself cannot do
+            missed.add("the whole script was NOT applied. After the first version, change the build with SEARCH/REPLACE"
+                    + " hunks or part('name') blocks: they keep everything that already works. If the design itself must"
+                    + " change (scale, massing, composition), put a line 'REWRITE: <what the current design cannot do that"
+                    + " the new one will>' before the script and send it again");
+            whole = null;
+            next = base;
+        } else if (whole != null) {
             next = whole;
-            done.add("whole script");
+            done.add(current == null ? "whole script" : "whole script (REWRITE: " + clip(rewriteReason == null ? "-" : rewriteReason, 120) + ")");
+            if (current != null && rewriteReason != null) journal.add("   rewrite: " + clip(rewriteReason, 160));
             int others = t.blocks().size() - 1 - loose.size() + t.takes().size() + (t.hunks().isEmpty() ? 0 : 1);
             if (others > 0) {
                 missed.add("a whole script replaces the build, so the " + others + " other edit(s) in the same answer"
@@ -1008,6 +1061,12 @@ public final class StudioSession {
             sb.append("Collisions between parts (one part wrote over another's blocks):\n");
             for (dev.aibuild.script.Collision c : between) sb.append("- ").append(c.describe()).append('\n');
         }
+        List<String> hover = hovering(r);
+        if (!hover.isEmpty()) {
+            sb.append("Gaps between parts (open air of 1-2 blocks between a part and the part right under it; it reads as lifted off):\n");
+            for (String h : hover) sb.append("- ").append(h).append('\n');
+            sb.append("Close a gap where the part should sit on, be worn by or rest on the one below; leave it where the space is meant.\n");
+        }
         Finisher.Result f = Finisher.plan(r.model(), info, between, host.options(r).expectInterior);
         if (f.statement() != null && f.edits() > 0) {
             sb.append("The finisher could repair ").append(f.edits()).append(" cells: ").append(String.join("; ", f.notes()))
@@ -1021,6 +1080,16 @@ public final class StudioSession {
             List<String> names = new ArrayList<>();
             images.addAll(overview(v));
             names.add(overviewNames(v));
+            List<FocalDetails.Detail> details = details(v);
+            for (FocalDetails.Detail fd : details) {
+                images.add(ContactSheet.single(r.model(), info, FocalDetails.camera(fd, viewW(), viewW() * 3 / 4), VoxelRaster.Options.defaults(),
+                        "detail up close: " + FocalDetails.describe(fd)));
+            }
+            if (!details.isEmpty()) {
+                names.add("the detail" + (details.size() == 1 ? "" : "s") + " a viewer's eye goes to first, up close and turned so depth shows, one per image ("
+                        + String.join("; ", details.stream().map(FocalDetails::describe).toList())
+                        + "): does each read as what it is, level and symmetric, flush in its surface, nothing of another part over it?");
+            }
             if (d != null && d.region != null && focus == null) {
                 int[] box = d.big ? null : pad(d.region, 2);
                 images.addAll(ContactSheet.beforeAfterViews(before.result.model(), r.model(), "BEFORE v" + before.n, "AFTER v" + v.n, info, box, viewW()));
@@ -1114,6 +1183,97 @@ public final class StudioSession {
         return out;
     }
 
+    /**
+     * Parts that hover over another part: underside cells with 1-2 blocks of open air (seen from a side) between them
+     * and that part, where at least 40% of what the part has over the other hovers instead of resting on it. Held up by
+     * a third part, such a part counts as connected, so no floating check sees it; to the eye it is lifted off.
+     */
+    static List<String> hovering(ScriptResult r) {
+        VoxelModel m = r.model();
+        Map<Long, String> owners = r.owners();
+        int[] b = m.bounds();
+        if (b == null || owners == null || owners.isEmpty()) return List.of();
+        Map<String, int[]> pairs = new LinkedHashMap<>();   // "upper|lower" -> {resting, hovering, sample x, y, z}
+        for (Map.Entry<Long, String> e : owners.entrySet()) {
+            long k = e.getKey();
+            int x = VoxelModel.kx(k), y = VoxelModel.ky(k), z = VoxelModel.kz(k);
+            if (!solid(m, x, y, z)) continue;
+            String up = top(e.getValue());
+            String under = owners.get(VoxelModel.key(x, y - 1, z));
+            if (solid(m, x, y - 1, z)) {
+                if (under != null && !top(under).equals(up)) pairs.computeIfAbsent(up + "|" + top(under), q -> new int[5])[0]++;
+                continue;
+            }
+            for (int g = 2; g <= 3; g++) {
+                if (!solid(m, x, y - g, z)) continue;
+                String low = owners.get(VoxelModel.key(x, y - g, z));
+                BlockSpec lb = m.get(x, y - g, z);
+                if (low != null && !top(low).equals(up) && !liquid(lb) && !slopesDown(m, owners, up, x, y, z) && open(m, b, x, y - 1, z)) {
+                    int[] c = pairs.computeIfAbsent(up + "|" + top(low), q -> new int[5]);
+                    if (c[1]++ == 0) {
+                        c[2] = x;
+                        c[3] = y - 1;
+                        c[4] = z;
+                    }
+                }
+                break;
+            }
+        }
+        List<String> out = new ArrayList<>();
+        for (Map.Entry<String, int[]> e : pairs.entrySet()) {
+            int[] c = e.getValue();
+            if (c[1] < 10 || c[1] < 0.4 * (c[0] + c[1])) continue;
+            String[] pq = e.getKey().split("\\|", 2);
+            out.add("part " + pq[0] + " hovers over part " + pq[1] + ": " + c[1] + " of its cells over it have an air gap below them, "
+                    + c[0] + " rest on it, e.g. the gap at (" + c[2] + "," + c[3] + "," + c[4] + ")");
+        }
+        return out;
+    }
+
+    /**
+     * Whether the part's underside goes on down near this cell, as a rounded or sloped body does towards where it
+     * rests: only a flat underside held at a height (a lid, a plate, a brim) hovers.
+     */
+    private static boolean slopesDown(VoxelModel m, Map<Long, String> owners, String part, int x, int y, int z) {
+        // within 2 cells: the steps of a rounded underside get wider than one cell towards its bottom
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                String o = owners.get(VoxelModel.key(x + dx, y - 1, z + dz));
+                if (o != null && top(o).equals(part) && solid(m, x + dx, y - 1, z + dz)) return true;
+            }
+        }
+        return false;
+    }
+
+    private static boolean solid(VoxelModel m, int x, int y, int z) {
+        BlockSpec s = m.get(x, y, z);
+        return s != null && !s.isAir();
+    }
+
+    private static boolean liquid(BlockSpec s) {
+        String n = s.name();
+        return n.equals("water") || n.equals("lava");
+    }
+
+    /** Air that a straight horizontal line leads out of the build from: a gap that is seen, not a closed space. */
+    private static boolean open(VoxelModel m, int[] b, int x, int y, int z) {
+        int[][] dirs = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (int[] d : dirs) {
+            int cx = x, cz = z;
+            boolean blocked = false;
+            while (cx >= b[0] && cx <= b[3] && cz >= b[2] && cz <= b[5]) {
+                if (solid(m, cx, y, cz)) {
+                    blocked = true;
+                    break;
+                }
+                cx += d[0];
+                cz += d[1];
+            }
+            if (!blocked) return true;
+        }
+        return false;
+    }
+
     private static String top(String part) {
         if (part == null) return "";
         int i = part.indexOf('/');
@@ -1205,6 +1365,18 @@ public final class StudioSession {
         return sb.toString();
     }
 
+    /** The two strongest focal details of a version, inside its subject (or above the ground of the whole build). */
+    private List<FocalDetails.Detail> details(Version v) {
+        return details(v.result);
+    }
+
+    private List<FocalDetails.Detail> details(ScriptResult r) {
+        Subject sub = subject(r);
+        VoxelModel m = r.model();
+        int[] within = sub != null ? sub.box : m.solidBounds() == null ? null : aboveGround(m);
+        return FocalDetails.find(m, info, within, 2);
+    }
+
     private List<byte[]> overview(Version v) {
         return overviews.computeIfAbsent(v.n, n -> {
             Subject sub = subject(v);
@@ -1215,7 +1387,7 @@ public final class StudioSession {
     private String overviewNames(Version v) {
         Subject sub = subject(v);
         return "version " + v.n + ", one view per image: the whole build from the south-east; "
-                + (sub == null ? "the whole build from the north-west" : "the subject (" + sub.name + ") close from the south-west")
+                + (sub == null ? "the whole build from the north-west" : "the subject (" + sub.name + ") close, straight from the front")
                 + "; eye level standing in front" + (sub == null ? "" : " of " + sub.name)
                 + "; a sheet of all four corners, the back at eye level and the top";
     }
@@ -1225,17 +1397,23 @@ public final class StudioSession {
     }
 
     /**
-     * The subject inside a scene: the top-level part group that rises highest, when it covers clearly less of the
-     * ground than the whole build (a tree on a landscaped plot, a castle in its grounds). Null when the build is
-     * one subject, so the views frame all of it.
+     * The subject inside a scene: the top-level part group that rises highest, together with the groups it stands on
+     * or carries (a hat on a cat on a pumpkin, a crown on its trunk on its island): groups that touch it in height and
+     * lie mostly within its footprint. It is the subject when it covers clearly less of the ground than the whole
+     * build (a tree on a landscaped plot, a castle in its grounds); null when the build is one subject, so the views
+     * frame all of it.
      */
     Subject subject(Version v) {
+        return subject(v.result);
+    }
+
+    Subject subject(ScriptResult r) {
         Map<String, int[]> groups = new java.util.LinkedHashMap<>();
-        for (ScriptResult.Part p : v.result.parts()) {
+        for (ScriptResult.Part p : r.parts()) {
             if (p.bounds() == null || p.cells() == 0) continue;
             groups.merge(top(p.name()), p.bounds().clone(), StudioSession::union);
         }
-        int[] all = v.result.model().solidBounds();
+        int[] all = r.model().solidBounds();
         if (all == null || groups.size() < 2) return null;
         String best = null;
         int[] box = null;
@@ -1245,9 +1423,47 @@ public final class StudioSession {
                 box = e.getValue();
             }
         }
-        double area = (double) (box[3] - box[0] + 1) * (box[5] - box[2] + 1);
         double whole = (double) (all[3] - all[0] + 1) * (all[5] - all[2] + 1);
-        return area <= 0.45 * whole ? new Subject(best, box) : null;
+        List<String> names = new ArrayList<>(List.of(best));
+        boolean grew = true;
+        while (grew) {
+            grew = false;
+            for (var e : groups.entrySet()) {
+                if (names.contains(e.getKey())) continue;
+                int[] g = e.getValue();
+                double area = (double) (g[3] - g[0] + 1) * (g[5] - g[2] + 1);
+                boolean touches = g[1] <= box[4] + 1 && g[4] >= box[1] - 1;
+                if (!touches || area > 0.45 * whole || insideShare(g, box, 1) < 0.6) continue;
+                names.add(e.getKey());
+                box = union(box, g);
+                grew = true;
+            }
+        }
+        double area = (double) (box[3] - box[0] + 1) * (box[5] - box[2] + 1);
+        return area <= 0.45 * whole ? new Subject(String.join(" + ", names), box) : null;
+    }
+
+    /**
+     * The share of a version's blocks whose part a new whole script writes differently (by source), weighted by the
+     * part's cells: near 0 for a whole script resent with a few edits, near 1 for a redesign.
+     */
+    static double redrawnShare(Version v, String script) {
+        long total = 0, changed = 0;
+        for (ScriptResult.Part p : v.result.parts()) {
+            if (p.cells() == 0) continue;
+            total += p.cells();
+            String was = ScriptPatch.partSource(v.source, p.name()), now = ScriptPatch.partSource(script, p.name());
+            if (was == null || now == null || !was.strip().equals(now.strip())) changed += p.cells();
+        }
+        return total == 0 ? 1 : (double) changed / total;
+    }
+
+    /** The share of {@code g}'s footprint (x, z) that lies within {@code box}'s footprint widened by {@code pad}. */
+    static double insideShare(int[] g, int[] box, int pad) {
+        int x1 = Math.max(g[0], box[0] - pad), x2 = Math.min(g[3], box[3] + pad);
+        int z1 = Math.max(g[2], box[2] - pad), z2 = Math.min(g[5], box[5] + pad);
+        if (x2 < x1 || z2 < z1) return 0;
+        return (double) (x2 - x1 + 1) * (z2 - z1 + 1) / ((double) (g[3] - g[0] + 1) * (g[5] - g[2] + 1));
     }
 
     private static int[] aboveGround(VoxelModel m) {
@@ -1434,131 +1650,212 @@ public final class StudioSession {
     }
 
     /**
+     * Draft {@code n} of the first turn: its answer and the tag of the call that wrote its script. A draft that only
+     * looked things up (a guide chapter, block ids) is given the answers and writes its script within the draft.
+     */
+    private String[] draft(List<ChatMessage> msgs, String tag, int n, boolean again) throws Exception {
+        String a = again ? host.rethink(msgs, tag) : host.call(msgs, tag);
+        StudioProtocol.Turn t = StudioProtocol.parse(a);
+        String found = t.script() == null ? lookups(t) : "";
+        if (found.isBlank() || left() <= TimeUnit.MINUTES.toNanos(8)) return new String[]{a, tag};
+        List<ChatMessage> fm = new ArrayList<>(msgs);
+        fm.add(ChatMessage.assistant(a));
+        fm.add(ChatMessage.user(found.strip() + "\n\nNow write your ```notes and your first complete script: the whole composition at its final size."));
+        String look = (again ? tag : s.tag + "-t1x" + n) + "-look";
+        try {
+            // both halves stay in the answer: the lookups are answered again in the reply, so later turns keep them
+            return new String[]{a + "\n\n" + host.call(fm, look), look};
+        } catch (Exception e) {
+            if (cancellation(e)) throw e;
+            return new String[]{a, tag};
+        }
+    }
+
+    /**
      * The first turn, asked {@link Settings#firstDrafts} times in parallel: the drafts whose scripts run meet in a
      * blind tournament (each pair judged in both orders), and the winner's answer becomes the session's first turn.
+     * Each draft is taken as it arrives: run at once, and given its fix call at once when it fails. Once one draft
+     * runs, the others are waited for only until half of the session is used: a draft that thinks for most of the
+     * session would leave no time to look at and improve whichever draft wins.
      */
     private String firstDraft(String opening) throws Exception {
         List<ChatMessage> msgs = messages(opening);
-        List<Future<String>> fs = new ArrayList<>();
-        for (int i = 1; i < s.firstDrafts; i++) {
-            String tag = s.tag + "-t1x" + (i + 1);
-            fs.add(host.pool().submit(() -> host.call(msgs, tag)));
+        int n = s.firstDrafts;
+        boolean limited = s.deadlineNanos != Long.MAX_VALUE;
+        long keepWaiting = limited ? left() / 2 : 0;   // the others are waited for while more than this is left
+        java.util.concurrent.ExecutorCompletionService<Object[]> cs = new java.util.concurrent.ExecutorCompletionService<>(host.pool());
+        List<Future<Object[]>> calls = new ArrayList<>();
+        String[] answers = new String[n + 1], tags = new String[n + 1];
+        boolean[] fixAsked = new boolean[n + 1];
+        Map<Integer, ScriptResult> ran = new java.util.TreeMap<>();
+        Map<Integer, String> ranAnswer = new java.util.HashMap<>();
+        List<Integer> held = new ArrayList<>();
+        int pending = 0, arrived = 0;
+        boolean reasonedArrived = false, rethinking = false;
+        for (int i = 1; i <= n; i++) {
+            int k = i;
+            calls.add(cs.submit(() -> new Object[]{k, "draft", draft(msgs, k == 1 ? s.tag + "-t1" : s.tag + "-t1x" + k, k, false)}));
+            pending++;
         }
-        List<String> answers = new ArrayList<>();
-        answers.add(host.call(msgs, s.tag + "-t1"));
-        for (Future<String> f : fs) {
-            try {
-                answers.add(f.get(Math.max(1, left() / 1_000_000_000L), TimeUnit.SECONDS));
-            } catch (Exception e) {
-                if (cancellation(e)) throw e;
-                f.cancel(true);
+        while (pending > 0) {
+            Future<Object[]> f;
+            if (!limited) f = cs.take();
+            else {
+                // a draft in hand (run, or held for skipping its reasoning) starts the cutoff for the others
+                long wait = ran.isEmpty() && held.isEmpty() ? left() : left() - keepWaiting;
+                if (wait <= 0) break;
+                f = cs.poll(wait, TimeUnit.NANOSECONDS);
+                if (f == null) break;
             }
-        }
-        // a draft that first looks things up (a guide chapter, block ids) gets its answers and writes its script
-        // within the draft, instead of being dropped for having no script yet
-        List<Integer> asked = new ArrayList<>();
-        List<Future<String>> follow = new ArrayList<>();
-        for (int i = 0; i < answers.size() && left() > TimeUnit.MINUTES.toNanos(8); i++) {
-            StudioProtocol.Turn t = StudioProtocol.parse(answers.get(i));
-            String found = t.script() == null ? lookups(t) : "";
-            if (found.isBlank()) continue;
-            List<ChatMessage> fm = new ArrayList<>(msgs);
-            fm.add(ChatMessage.assistant(answers.get(i)));
-            fm.add(ChatMessage.user(found.strip() + "\n\nNow write your ```notes and your first complete script: the whole composition at its final size."));
-            String tag = s.tag + "-t1x" + (i + 1) + "-look";
-            asked.add(i);
-            follow.add(host.pool().submit(() -> host.call(fm, tag)));
-        }
-        for (int k = 0; k < follow.size(); k++) {
+            pending--;
+            Object[] got;
             try {
-                String more = follow.get(k).get(Math.max(1, left() / 1_000_000_000L), TimeUnit.SECONDS);
-                // both halves stay in the answer: the lookups are answered again in the reply, so later turns keep them
-                answers.set(asked.get(k), answers.get(asked.get(k)) + "\n\n" + more);
-            } catch (Exception e) {
-                if (cancellation(e)) throw e;
-                follow.get(k).cancel(true);
-            }
-        }
-        List<String> ok = new ArrayList<>();
-        List<ScriptResult> runs = new ArrayList<>();
-        List<Integer> failedAt = new ArrayList<>();
-        List<String> failedError = new ArrayList<>();
-        for (int i = 0; i < answers.size(); i++) {
-            String a = answers.get(i);
-            StudioProtocol.Turn t = StudioProtocol.parse(a);
-            if (t.script() == null) continue;
-            ScriptResult r = runtime.run(t.script(), seed, null, limits, budget, null);
-            if (!r.ok() || r.model().nonAirCount() == 0) {
-                failedAt.add(i);
-                failedError.add(r.ok() ? "the script ran but placed no blocks" : r.error().describe());
+                got = f.get();
+            } catch (java.util.concurrent.ExecutionException e) {
+                if (e.getCause() instanceof Exception c && cancellation(c)) throw c;
                 continue;
             }
-            host.prepare(r);
-            ok.add(a);
-            runs.add(r);
-        }
-        // a draft that fails on a slip is a whole design lost: each gets one fix call, all in parallel
-        if (!failedAt.isEmpty() && answers.size() > 1 && left() > TimeUnit.MINUTES.toNanos(8)) {
-            List<Future<String>> fixes = new ArrayList<>();
-            for (int k = 0; k < failedAt.size(); k++) {
-                String a = answers.get(failedAt.get(k));
-                List<ChatMessage> fm = new ArrayList<>(msgs);
-                fm.add(ChatMessage.assistant(a));
-                fm.add(ChatMessage.user("Your script failed to run:\n" + failedError.get(k) + "\nFix only that: answer with SEARCH/REPLACE"
-                        + " hunks against your script (or the whole corrected script in a ```js block). Change nothing else."));
-                String tag = s.tag + "-t1fix" + (failedAt.get(k) + 1);
-                fixes.add(host.pool().submit(() -> host.call(fm, tag)));
+            int i = (Integer) got[0];
+            String kind = (String) got[1];
+            if (kind.equals("fix")) {
+                String fixed = fixedScript(answers[i], (String) got[2]);
+                if (fixed == null) continue;
+                ScriptResult r = runtime.run(fixed, seed, null, limits, budget, null);
+                if (!r.ok() || r.model().nonAirCount() == 0) continue;
+                host.prepare(r);
+                // the fixed draft stands in for the answer, with its notes and the corrected script
+                ran.put(i, r);
+                ranAnswer.put(i, answers[i].replace(StudioProtocol.parse(answers[i]).script().strip(), fixed.strip()));
+                continue;
             }
-            for (int k = 0; k < fixes.size(); k++) {
-                try {
-                    String fix = fixes.get(k).get(Math.max(1, left() / 1_000_000_000L), TimeUnit.SECONDS);
-                    String a = answers.get(failedAt.get(k));
-                    String src = StudioProtocol.parse(a).script();
-                    StudioProtocol.Turn ft = StudioProtocol.parse(fix);
-                    String fixed = null;
-                    if (!ft.hunks().isEmpty()) {
-                        StringBuilder text = new StringBuilder();
-                        for (String[] h : ft.hunks()) text.append("<<<<<<< SEARCH\n").append(h[0]).append("\n=======\n").append(h[1]).append("\n>>>>>>> REPLACE\n");
-                        ScriptPatch.Result p = ScriptPatch.apply(src, text.toString());
-                        if (p.ok()) fixed = p.source();
-                    } else if (ft.script() != null && partsOnly(ft.script()) == null) {
-                        fixed = ft.script();
+            String[] d = (String[]) got[2];
+            if (kind.equals("again") && d == null) {
+                if (tryDraft(i, answers, fixAsked, ran, ranAnswer, cs, calls, msgs)) pending++;   // the rethink failed: the draft as it was
+                continue;
+            }
+            answers[i] = d[0];
+            tags[i] = d[1];
+            if (kind.equals("draft")) {
+                arrived++;
+                // one draft that skipped its reasoning is judged as it is against the others; when every draft
+                // skipped it, all are asked again in parallel, so the session never starts from unthought work
+                if (n > 1 && !reasonedArrived && host.unreasoned(d[1])) {
+                    held.add(i);
+                    if (arrived == n && held.size() == n && left() > TimeUnit.MINUTES.toNanos(8)) {
+                        rethinking = true;
+                        held.clear();
+                        for (int j = 1; j <= n; j++) {
+                            int k = j;
+                            calls.add(cs.submit(() -> {
+                                try {
+                                    return new Object[]{k, "again", draft(msgs, s.tag + "-t1r" + k, k, true)};
+                                } catch (Exception e) {
+                                    if (cancellation(e)) throw e;
+                                    return new Object[]{k, "again", null};
+                                }
+                            }));
+                        }
+                        pending += n;
+                    } else if (arrived == n) {
+                        for (int j : held) if (tryDraft(j, answers, fixAsked, ran, ranAnswer, cs, calls, msgs)) pending++;
+                        held.clear();
                     }
-                    if (fixed == null) continue;
-                    ScriptResult r = runtime.run(fixed, seed, null, limits, budget, null);
-                    if (!r.ok() || r.model().nonAirCount() == 0) continue;
-                    host.prepare(r);
-                    // the fixed draft stands in for the answer, with its notes and the corrected script
-                    ok.add(a.replace(src.strip(), fixed.strip()));
-                    runs.add(r);
-                } catch (Exception e) {
-                    if (cancellation(e)) throw e;
+                    continue;
+                }
+                if (!rethinking) {
+                    reasonedArrived = true;
+                    for (int j : held) if (tryDraft(j, answers, fixAsked, ran, ranAnswer, cs, calls, msgs)) pending++;
+                    held.clear();
                 }
             }
+            if (tryDraft(i, answers, fixAsked, ran, ranAnswer, cs, calls, msgs)) pending++;
         }
-        if (ok.size() < 2) {
-            if (answers.size() > 1) draftNote = "(" + answers.size() + " first drafts were written in parallel; " + ok.size() + " of them ran, and that one is built on.)";
-            return ok.isEmpty() ? answers.getFirst() : ok.getFirst();
+        for (int j : held) {
+            StudioProtocol.Turn t = StudioProtocol.parse(answers[j]);
+            if (t.script() == null) continue;
+            ScriptResult r = runtime.run(t.script(), seed, null, limits, budget, null);
+            if (!r.ok() || r.model().nonAirCount() == 0) continue;
+            host.prepare(r);
+            ran.put(j, r);
+            ranAnswer.put(j, answers[j]);
+        }
+        int dropped = 0;
+        for (Future<Object[]> f : calls) {
+            if (!f.isDone()) {
+                f.cancel(true);
+                dropped++;
+            }
+        }
+        List<Integer> nums = new ArrayList<>(ran.keySet());
+        String late = dropped == 0 ? "" : "; " + dropped + " call(s) still thinking at half the session time were stopped";
+        if (nums.size() < 2) {
+            if (n > 1) draftNote = "(" + n + " first drafts were written in parallel; " + nums.size() + " of them ran" + late
+                    + (nums.isEmpty() ? ")" : ", and that one is built on.)");
+            if (!nums.isEmpty()) return ranAnswer.get(nums.getFirst());
+            for (int i = 1; i <= n; i++) if (answers[i] != null) return answers[i];
+            throw new IllegalStateException("no first draft came back in time");
         }
         int best = 0;
         List<String> notesOut = new ArrayList<>();
-        for (int c = 1; c < ok.size(); c++) {
+        for (int c = 1; c < nums.size(); c++) {
             if (left() < TimeUnit.MINUTES.toNanos(4)) break;
-            char w = tournamentMatch(runs.get(best).model(), runs.get(c).model(), "draft " + (best + 1) + " vs " + (c + 1), notesOut);
+            char w = tournamentMatch(ran.get(nums.get(best)), ran.get(nums.get(c)), "draft " + nums.get(best) + " vs " + nums.get(c), notesOut);
             if (w == 'B') best = c;
         }
         checks++;
-        draftNote = "(" + ok.size() + " first drafts were written in parallel and compared blind; draft " + (best + 1)
+        int winner = nums.get(best);
+        draftNote = "(" + nums.size() + " first drafts were written in parallel and compared blind" + late + "; draft " + winner
                 + " was preferred and is the one built on" + (notesOut.isEmpty() ? "" : ": " + clip(String.join(" / ", notesOut), 400)) + ")";
-        journal.add("   first drafts: " + ok.size() + " ran, draft " + (best + 1) + " chosen blind");
-        return ok.get(best);
+        journal.add("   first drafts: " + nums.size() + " ran, draft " + winner + " chosen blind");
+        return ranAnswer.get(winner);
+    }
+
+    /**
+     * Runs draft {@code i}'s script; one that fails on a slip is a whole design lost, so it gets one fix call at once
+     * (in parallel with the drafts still thinking) while there is time for it.
+     */
+    private boolean tryDraft(int i, String[] answers, boolean[] fixAsked, Map<Integer, ScriptResult> ran, Map<Integer, String> ranAnswer,
+                          java.util.concurrent.ExecutorCompletionService<Object[]> cs, List<Future<Object[]>> calls, List<ChatMessage> msgs) {
+        String a = answers[i];
+        StudioProtocol.Turn t = StudioProtocol.parse(a);
+        if (t.script() == null) return false;
+        ScriptResult r = runtime.run(t.script(), seed, null, limits, budget, null);
+        if (r.ok() && r.model().nonAirCount() > 0) {
+            host.prepare(r);
+            ran.put(i, r);
+            ranAnswer.put(i, a);
+            return false;
+        }
+        if (fixAsked[i] || s.firstDrafts < 2 || left() <= TimeUnit.MINUTES.toNanos(5)) return false;
+        fixAsked[i] = true;
+        String error = r.ok() ? "the script ran but placed no blocks" : r.error().describe();
+        List<ChatMessage> fm = new ArrayList<>(msgs);
+        fm.add(ChatMessage.assistant(a));
+        fm.add(ChatMessage.user("Your script failed to run:\n" + error + "\nFix only that: answer with SEARCH/REPLACE"
+                + " hunks against your script (or the whole corrected script in a ```js block). Change nothing else."));
+        String tag = s.tag + "-t1fix" + i;
+        calls.add(cs.submit(() -> new Object[]{i, "fix", host.call(fm, tag)}));
+        return true;
+    }
+
+    /** Draft {@code answer}'s script with a fix call's hunks or whole script applied, or null when it does not apply. */
+    private String fixedScript(String answer, String fix) {
+        String src = StudioProtocol.parse(answer).script();
+        StudioProtocol.Turn ft = StudioProtocol.parse(fix);
+        if (!ft.hunks().isEmpty()) {
+            StringBuilder text = new StringBuilder();
+            for (String[] h : ft.hunks()) text.append("<<<<<<< SEARCH\n").append(h[0]).append("\n=======\n").append(h[1]).append("\n>>>>>>> REPLACE\n");
+            ScriptPatch.Result p = ScriptPatch.apply(src, text.toString());
+            return p.ok() ? p.source() : null;
+        }
+        return ft.script() != null && partsOnly(ft.script()) == null ? ft.script() : null;
     }
 
     /** One blind match, both orders in parallel: 'A' or 'B' when both agree, else 'A' (the incumbent stays). */
-    private char tournamentMatch(VoxelModel a, VoxelModel b, String what, List<String> notesOut) {
+    private char tournamentMatch(ScriptResult ra, ScriptResult rb, String what, List<String> notesOut) {
         String ask = "BUILD REQUEST: \"" + request + "\"\nWhich version is the better build of this request?";
-        List<ChatMessage> m1 = List.of(ChatMessage.system(JUDGE_SYSTEM), ChatMessage.user(ask, ContactSheet.pairViews(a, b, info, viewW())));
-        List<ChatMessage> m2 = List.of(ChatMessage.system(JUDGE_SYSTEM), ChatMessage.user(ask, ContactSheet.pairViews(b, a, info, viewW())));
+        List<ChatMessage> m1 = List.of(ChatMessage.system(JUDGE_SYSTEM), ChatMessage.user(ask, pairViews(ra, rb)));
+        List<ChatMessage> m2 = List.of(ChatMessage.system(JUDGE_SYSTEM), ChatMessage.user(ask, pairViews(rb, ra)));
         try {
             Future<String> f2 = host.pool().submit(() -> host.judge(m2, s.tag + "-drafts-b"));
             String j1 = host.judge(m1, s.tag + "-drafts-a");
@@ -1574,7 +1871,9 @@ public final class StudioSession {
     static final String JUDGE_SYSTEM = """
             You are an experienced Minecraft builder judging two versions of the same build. Each image is one camera,
             with version A on the left half and version B on the right half, the camera the same for both: two corners
-            and a player's view from the front. Compare them half against half, closely. Judge them as a player would: does it
+            and a player's view from the front, for a subject inside a scene the subject close from the front, and the
+            details a viewer's eye goes to first (a face, a door, an emblem) up close. Compare them half against half,
+            closely; a detail that does not read as what it is counts as a mistake. Judge them as a player would: does it
             read as the subject that was asked for, are the proportions and silhouette right, is there depth and detail
             where the eye goes, do the materials work, are there obvious mistakes (floating pieces, holes, noise,
             clutter)? A bigger or busier build is not better by itself.
@@ -1587,29 +1886,97 @@ public final class StudioSession {
      * itself cannot decide. Only when both judgments prefer the version before does it stay current; the new one is
      * kept and REVERT n takes it anyway. Small changes are not checked: the model sees their before and after itself.
      */
-    private void verify(Version before, Version after, Delta d, StringBuilder reply) {
-        if (!s.verify || !s.eyes || focus != null || !(d.big || !d.warnings.isEmpty())) return;
-        if (s.deadlineNanos != Long.MAX_VALUE && left() < TimeUnit.MINUTES.toNanos(3)) return;
-        List<byte[]> ab = ContactSheet.pairViews(before.result.model(), after.result.model(), info, viewW());
-        List<byte[]> ba = ContactSheet.pairViews(after.result.model(), before.result.model(), info, viewW());
+    /** The blind judges' views of two versions: whole-build cameras, the subject close from the front, its details up close. */
+    private List<byte[]> judgeViews(Version a, Version b) {
+        return pairViews(a.result, b.result);
+    }
+
+    private List<byte[]> pairViews(ScriptResult a, ScriptResult b) {
+        Subject sa = subject(a), sb = subject(b);
+        int[] box = sa == null || sb == null ? null : union(sa.box, sb.box);
+        List<byte[]> out = new ArrayList<>(ContactSheet.pairViews(a.model(), b.model(), info, viewW(), box));
+        // the details a viewer looks at first, the same camera for both: a face or a door decides how a build reads
+        List<FocalDetails.Detail> d = details(b);
+        if (d.isEmpty()) d = details(a);
+        int half = ContactSheet.half(viewW());
+        for (FocalDetails.Detail fd : d) {
+            VoxelRaster.Camera cam = FocalDetails.camera(fd, half, half);
+            out.add(ContactSheet.sideBySide(a.model(), b.model(), info, cam, VoxelRaster.Options.defaults(),
+                    "A: a detail up close", "B: a detail up close"));
+        }
+        return out;
+    }
+
+    /** A blind check that runs while the model works on its next turn. */
+    private record PendingCheck(Version before, Version after, Future<String> a, Future<String> b) {
+    }
+
+    private PendingCheck pending;
+    /** The REWRITE reason of the answer being carried out, or null. */
+    private String rewriteReason;
+
+    /**
+     * Starts the blind check of a big change: two judgments in parallel, the order swapped between them. It runs
+     * while the model works on its next turn, so the session never waits for it; {@link #collectCheck} reads it.
+     * Without a pool it is judged at once.
+     */
+    private boolean startCheck(Version before, Version after, boolean worth) {
+        if (!s.verify || !s.eyes || focus != null || !worth) return false;
+        if (s.deadlineNanos != Long.MAX_VALUE && left() < TimeUnit.MINUTES.toNanos(3)) return false;
+        // one check at a time: a running one is let finish (its verdict still counts) rather than thrown away
+        if (pending != null) return false;
         String ask = "BUILD REQUEST: \"" + request + "\"\nWhich version is the better build of this request?";
-        List<ChatMessage> m1 = List.of(ChatMessage.system(JUDGE_SYSTEM), ChatMessage.user(ask, ab));
-        List<ChatMessage> m2 = List.of(ChatMessage.system(JUDGE_SYSTEM), ChatMessage.user(ask, ba));
+        List<ChatMessage> m1 = List.of(ChatMessage.system(JUDGE_SYSTEM), ChatMessage.user(ask, judgeViews(before, after)));
+        List<ChatMessage> m2 = List.of(ChatMessage.system(JUDGE_SYSTEM), ChatMessage.user(ask, judgeViews(after, before)));
         String tag = s.tag + "-check-v" + after.n;
-        String j1, j2;
         ExecutorService pool = host.pool();
-        try {
-            if (pool != null) {
-                Future<String> f2 = pool.submit(() -> host.judge(m2, tag + "b"));
-                j1 = host.judge(m1, tag + "a");
-                j2 = f2.get(5, TimeUnit.MINUTES);
-            } else {
-                j1 = host.judge(m1, tag + "a");
-                j2 = host.judge(m2, tag + "b");
+        if (pool != null) {
+            pending = new PendingCheck(before, after, pool.submit(() -> host.judge(m1, tag + "a")), pool.submit(() -> host.judge(m2, tag + "b")));
+        } else {
+            java.util.concurrent.CompletableFuture<String> a = new java.util.concurrent.CompletableFuture<>(), b = new java.util.concurrent.CompletableFuture<>();
+            try {
+                a.complete(host.judge(m1, tag + "a"));
+                b.complete(host.judge(m2, tag + "b"));
+            } catch (Exception e) {
+                a.completeExceptionally(e);
+                b.completeExceptionally(e);
             }
+            pending = new PendingCheck(before, after, a, b);
+        }
+        return true;
+    }
+
+    private void cancelCheck() {
+        if (pending == null) return;
+        pending.a.cancel(true);
+        pending.b.cancel(true);
+        pending = null;
+    }
+
+    /**
+     * The verdict of the pending blind check once it is made; with {@code await} (the model said DONE) it is waited
+     * for, otherwise a check still running stays pending for a later reply. Only when both judgments
+     * prefer the version before does it change anything: if nothing was built on the checked version yet, the version
+     * before becomes current again (the new one is kept, REVERT n takes it anyway); if the model already built on it,
+     * the verdict is reported with what to take back.
+     */
+    private void collectCheck(StringBuilder reply, boolean await) {
+        PendingCheck p = pending;
+        if (p == null || (!await && !(p.a.isDone() && p.b.isDone()))) return;
+        pending = null;
+        Version before = p.before, after = p.after;
+        String j1, j2;
+        try {
+            long wait = Math.max(1, Math.min(TimeUnit.MINUTES.toSeconds(5), left() / 1_000_000_000L));
+            j1 = p.a.get(wait, TimeUnit.SECONDS);
+            j2 = p.b.get(wait, TimeUnit.SECONDS);
         } catch (Exception e) {
+            p.a.cancel(true);
+            p.b.cancel(true);
             if (cancellation(e)) return;
-            reply.append("(The blind check of this change could not be made: ").append(clip(String.valueOf(e.getMessage()), 160)).append(")\n");
+            Throwable c = e instanceof java.util.concurrent.ExecutionException && e.getCause() != null ? e.getCause() : e;
+            reply.append("(The blind check of version ").append(after.n).append(" could not be made: ")
+                    .append(clip(String.valueOf(c.getMessage()), 160)).append(")\n");
             return;
         }
         checks++;
@@ -1621,21 +1988,61 @@ public final class StudioSession {
         String why2 = clip(relabel(reason(j2), "version " + after.n, "version " + before.n), 220);
         if (oldWins1 && oldWins2) {
             rejected++;
-            current = before;
-            host.shown(before);
             reply.append("BLIND CHECK: an independent judge compared version ").append(before.n).append(" and version ").append(after.n)
                     .append(" twice, unlabelled and in both orders, and preferred version ").append(before.n).append(" both times: \"")
-                    .append(why1).append("\" / \"").append(why2).append("\"\nVersion ").append(before.n)
-                    .append(" stays current. Version ").append(after.n).append(" is kept: REVERT ").append(after.n)
-                    .append(" if you are sure it is better, or reach your goal from version ").append(before.n).append(" with a smaller change.\n");
+                    .append(why1).append("\" / \"").append(why2).append("\"\n");
+            if (current == after) {
+                current = before;
+                host.shown(before);
+                reply.append("Version ").append(before.n).append(" is current again. Version ").append(after.n).append(" is kept: REVERT ")
+                        .append(after.n).append(" if you are sure it is better, or reach your goal from version ").append(before.n)
+                        .append(" with a smaller change.\n");
+                journal.add("   blind check preferred v" + before.n + " over v" + after.n + ": " + clip(why1, 140) + " -> v" + before.n + " current");
+            } else {
+                reply.append("You have built on version ").append(after.n).append(" since. REVERT ").append(before.n)
+                        .append(" goes back to the version the judge preferred; or keep going if your newer change answers it.\n");
+                journal.add("   blind check preferred v" + before.n + " over v" + after.n + ": " + clip(why1, 140));
+            }
             reply.append(salvage(before, after));
-            journal.add("   blind check preferred v" + before.n + " over v" + after.n + ": " + clip(why1, 140) + " -> v" + before.n + " current");
         } else {
             String how = newWins1 && newWins2 ? "preferred the new version both times" : "found no consistent difference";
-            reply.append("BLIND CHECK: an independent judge ").append(how).append("; version ").append(after.n).append(" stays current. (\"")
-                    .append(why1).append("\" / \"").append(why2).append("\")\n");
+            reply.append("BLIND CHECK of version ").append(after.n).append(" against version ").append(before.n).append(": the judge ")
+                    .append(how).append(". (\"").append(why1).append("\" / \"").append(why2).append("\")\n");
             journal.add("   blind check: v" + after.n + " kept (" + how + ")");
         }
+    }
+
+    /** The top-level parts of {@code after} whose source differs from (or is missing in) {@code before}. */
+    static List<String> changedParts(String before, String after) {
+        List<String> out = new ArrayList<>();
+        List<ScriptLint.PartStatement> ps = ScriptLint.topLevelParts(after);
+        if (ps == null) return out;
+        for (ScriptLint.PartStatement p : ps) {
+            String mine = after.substring(p.start(), p.end());
+            if (!mine.equals(ScriptPatch.partSource(before, p.name()))) out.add(p.name());
+        }
+        return out;
+    }
+
+    /** The part changed in each of the last {@code length} versions along the chain, and the version before them. */
+    record Streak(String part, int length, Version anchor) {
+    }
+
+    Streak streak(Version newest) {
+        Version parent = pick(newest.parent);
+        if (parent == null) return null;
+        Streak best = null;
+        for (String part : changedParts(parent.source, newest.source)) {
+            int k = 0;
+            Version v = newest, anchor = parent;
+            for (Version pv = pick(v.parent); pv != null && changedParts(pv.source, v.source).contains(part); pv = pick(v.parent)) {
+                k++;
+                anchor = pv;
+                v = pv;
+            }
+            if (best == null || k > best.length) best = new Streak(part, k, anchor);
+        }
+        return best;
     }
 
     /**
@@ -1651,15 +2058,7 @@ public final class StudioSession {
             if (now.contains(f.key) || f.part.isEmpty() || ScriptPatch.partSource(rejected.source, f.part) == null) continue;
             fixed.computeIfAbsent(f.part, k -> new ArrayList<>()).add(clip(f.text, 110));
         }
-        List<String> changedParts = new ArrayList<>();
-        List<ScriptLint.PartStatement> ps = ScriptLint.topLevelParts(rejected.source);
-        if (ps != null) {
-            for (ScriptLint.PartStatement p : ps) {
-                String mine = rejected.source.substring(p.start(), p.end());
-                String theirs = ScriptPatch.partSource(kept.source, p.name());
-                if (!mine.equals(theirs)) changedParts.add(p.name());
-            }
-        }
+        List<String> changedParts = changedParts(kept.source, rejected.source);
         if (fixed.isEmpty() && changedParts.size() < 2) return "";
         StringBuilder sb = new StringBuilder("What version ").append(rejected.n).append(" did, part by part (the judgment was on the whole):\n");
         for (var e : fixed.entrySet()) {
@@ -1734,7 +2133,7 @@ public final class StudioSession {
             long sec = TimeUnit.NANOSECONDS.toSeconds(Math.max(0, left()));
             sb.append("Time left: ").append(sec / 60).append(" min ").append(sec % 60).append(" s; turn ");
         }
-        sb.append(turn + 1).append(" of at most ").append(s.maxTurns).append(". ");
+        sb.append(turn + 1).append(" (limits, not targets: DONE as soon as the build is right). ");
         sb.append(current == null ? "No version yet." : "Versions 1.." + versions.size() + ", current " + current.n + " (it ships if time runs out).");
         List<Helper> open = helpers.stream().filter(h -> !h.closed && !h.reported).toList();
         if (!open.isEmpty()) {

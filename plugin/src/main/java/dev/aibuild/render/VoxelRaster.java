@@ -174,7 +174,24 @@ public final class VoxelRaster {
         return orthoFit(box, dir(ISO_AZ[Math.floorMod(view, 4)], -58), w, h, 0.96);
     }
 
-        /** Perspective close-up of a box (a part), from one of the four iso directions, slightly above. */
+    /**
+     * Perspective close-up straight from the front (south), a little above, framed tight on a box: faces, fronts
+     * and the details a player looks at read here, where a corner view shows them at a slant or not at all.
+     */
+    public static Camera front(int[] box, int w, int h) {
+        double[] c = {(box[0] + box[3] + 1) / 2.0, (box[1] + box[4] + 1) / 2.0, (box[2] + box[5] + 1) / 2.0};
+        double halfW = (box[3] - box[0] + 1) / 2.0 + 0.75, halfH = (box[4] - box[1] + 1) / 2.0 + 0.75, halfD = (box[5] - box[2] + 1) / 2.0;
+        double fov = 40, aspect = (double) w / h;
+        // look() spans the field of view over the larger side of the image
+        double t = Math.tan(Math.toRadians(fov) / 2);
+        double tanH = aspect >= 1 ? t : t * aspect, tanV = aspect >= 1 ? t / aspect : t;
+        double dist = Math.max(halfW / tanH, halfH / tanV) * 1.06 + halfD;
+        double[] d = dir(0, -10);
+        double[] pos = {c[0] - d[0] * dist, c[1] - d[1] * dist, c[2] - d[2] * dist};
+        return look(pos, c, fov, w, h);
+    }
+
+    /** Perspective close-up of a box (a part), from one of the four iso directions, slightly above. */
     public static Camera closeup(int[] box, int view, int w, int h) {
         double[] c = {(box[0] + box[3] + 1) / 2.0, (box[1] + box[4] + 1) / 2.0, (box[2] + box[5] + 1) / 2.0};
         double rx = (box[3] - box[0] + 1) / 2.0, ry = (box[4] - box[1] + 1) / 2.0, rz = (box[5] - box[2] + 1) / 2.0;

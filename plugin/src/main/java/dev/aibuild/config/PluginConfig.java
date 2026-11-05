@@ -46,7 +46,7 @@ public final class PluginConfig {
 
     /** Studio: the wall clock of a new build in minutes, by mode. */
     public int studioMinutes(String mode) {
-        return studioMinutes.getOrDefault(mode, 30);
+        return studioMinutes.getOrDefault(mode, 25);
     }
 
     /** Studio: parallel sessions for a new build (the blind judge picks between two or more), by mode. */
@@ -224,7 +224,7 @@ public final class PluginConfig {
         interiors = perMode(c, "script.interiors", Map.of("fast", 0, "light", 1, "standard", 1, "extra", 1), 0, 1);
         selfCheck = perMode(c, "script.self-check", Map.of("fast", 0, "light", 0, "standard", 1, "extra", 1), 0, 1);
         writeOnce = c.getBoolean("script.write-once", true);
-        studioMinutes = perMode(c, "studio.minutes", Map.of("fast", 8, "light", 15, "standard", 30, "extra", 60), 2, 240);
+        studioMinutes = perMode(c, "studio.minutes", Map.of("fast", 6, "light", 10, "standard", 25, "extra", 45), 2, 240);
         studioSessions = perMode(c, "studio.sessions", Map.of("fast", 1, "light", 1, "standard", 1, "extra", 2), 1, 4);
         studioFirstDrafts = perMode(c, "studio.first-drafts", Map.of("fast", 1, "light", 1, "standard", 2, "extra", 3), 1, 4);
         studioVerify = c.getBoolean("studio.verify", true);

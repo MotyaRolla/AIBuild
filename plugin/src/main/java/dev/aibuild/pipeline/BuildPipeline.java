@@ -670,9 +670,25 @@ public final class BuildPipeline {
         v.score = -1;
     }
 
+    private static final java.util.regex.Pattern DRAFT_TAG = java.util.regex.Pattern.compile("-t1(?:x(\\d+)|r(\\d+)|fix(\\d+))?(?:-look)?$");
+
+    /**
+     * The live-view stream a studio call writes to: each first draft its own tab ({@code draft1}, {@code draft2}, …,
+     * its lookups, fix and rethink included), so every draft is seen thinking and writing while they run in parallel;
+     * the session's later turns are the {@code program}; a helper session's calls are not streamed.
+     */
+    static String studioStream(String tag) {
+        if (tag == null || java.util.regex.Pattern.compile("-d\\d").matcher(tag).find()) return null;
+        java.util.regex.Matcher m = DRAFT_TAG.matcher(tag);
+        if (!m.find()) return "program";
+        String n = m.group(1) != null ? m.group(1) : m.group(2) != null ? m.group(2) : m.group(3) != null ? m.group(3) : "1";
+        return "draft" + n;
+    }
+
     /** The studio's view of the pipeline for one session; {@code lead} sessions drive the live view and the world. */
     private StudioSession.Host studioHost(Job job, Transcript tr, Build build, Anchor anchor, String words, boolean lead) {
         Consumer<ScriptResult> preview = lead ? streamingPreview(job, build, anchor) : null;
+        Set<String> unreasoned = ConcurrentHashMap.newKeySet();
         return new StudioSession.Host() {
             @Override
             public String call(List<ChatMessage> msgs, String tag) throws Exception {
@@ -680,8 +696,22 @@ public final class BuildPipeline {
                 // (max in standard and extra); later turns are edits and checks at the build effort
                 boolean design = tag.endsWith("-t1") || tag.contains("-t1x");
                 String effort = design && job.mode.effortPlan != null && !"off".equals(job.mode.effortPlan) ? job.mode.effortPlan : job.mode.effortBuild;
-                return callText(job, tr, tag, effort, msgs, lead && !tag.contains("-d") && !tag.contains("-t1x") && !tag.contains("-t1fix")
-                        ? codeStream(job, "program") : null, null);
+                // drafts written in parallel are compared blind, so an answer that skipped its reasoning is judged
+                // there instead of being written again while the other drafts wait
+                boolean parallel = design && cfg.get().studioFirstDrafts(job.mode.id) > 1;
+                String kind = lead ? studioStream(tag) : null;
+                return callText(job, tr, tag, effort, msgs, kind != null ? codeStream(job, kind) : null, null, parallel ? unreasoned : null);
+            }
+
+            @Override
+            public boolean unreasoned(String tag) {
+                return unreasoned.contains(tag);
+            }
+
+            @Override
+            public String rethink(List<ChatMessage> msgs, String tag) throws Exception {
+                String kind = lead ? studioStream(tag) : null;
+                return callText(job, tr, tag, job.mode.effortBuild, msgs, kind != null ? codeStream(job, kind) : null, null);
             }
 
             @Override
@@ -2267,7 +2297,12 @@ public final class BuildPipeline {
      */
     static String studioScaleHint(BuildMode mode) {
         String size = "Size it to the subject and the request (1 block = 1 m): a request that says huge or giant gets a"
-                + " build that reads as huge next to a player.";
+                + " build that reads as huge next to a player. A figure, animal or object smaller than a room in life is"
+                + " built as a statue sized from its smallest feature that must read (eyes 1 block each with a block"
+                + " between them, so a face 7+ wide); \"small\" means the low end of that size, never below it. That feature sets"
+                + " the scale only: every other mass then takes its real size against it (body against head, base against"
+                + " body, as the real subject looks in its pose), so the outline reads as the subject. For a single"
+                + " subject, the setting is what the request asks for around it, or else a base and a little around it: lower than the subject and never hiding it from the front.";
         return switch (mode.id) {
             case BuildMode.FAST -> size + " Keep it complete but compact.";
             case BuildMode.EXTRA -> size + " This is a showcase: spend detail generously on the subject and what frames it.";
@@ -3812,6 +3847,15 @@ public final class BuildPipeline {
      */
     private String callText(Job job, Transcript tr, String tag, String effort, List<ChatMessage> msgs,
                             StreamListener live, java.util.concurrent.atomic.AtomicBoolean stop) throws Exception {
+        return callText(job, tr, tag, effort, msgs, live, stop, null);
+    }
+
+    /**
+     * As above. A max answer that came back without any reasoning is asked again at high, unless {@code unreasoned}
+     * is given: then it is kept and its tag recorded there, for callers that decide themselves (parallel drafts).
+     */
+    private String callText(Job job, Transcript tr, String tag, String effort, List<ChatMessage> msgs,
+                            StreamListener live, java.util.concurrent.atomic.AtomicBoolean stop, Set<String> unreasoned) throws Exception {
         PluginConfig c = cfg.get();
         String eff = effort;
         String lastErr = null;
@@ -3870,7 +3914,9 @@ public final class BuildPipeline {
                     .field("answer", res.content());
             boolean truncated = "length".equals(res.finishReason());
             boolean empty = res.content() == null || res.content().isBlank();
-            if (!empty && !truncated && attempt == 0 && skippedThinking(eff, res, think)) {
+            boolean skipped = !empty && !truncated && attempt == 0 && skippedThinking(eff, res, think);
+            if (skipped && unreasoned != null) unreasoned.add(tag);
+            if (skipped && unreasoned == null) {
                 // the gateway sometimes answers a max request without thinking at all: a substantial answer with no
                 // reasoning is the model's worst work, so it is asked once more at high, which thinks reliably
                 tb.status(TraceStep.Status.FAILED).summary("answered at " + eff + " without any reasoning; asking again at high");
